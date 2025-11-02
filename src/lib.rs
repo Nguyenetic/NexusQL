@@ -41,6 +41,9 @@ pub mod join;
 // Week 15: CTEs & Recursive Queries
 pub mod cte;
 
+// Week 16: JSON/JSONB & Arrays
+pub mod jsonb;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
