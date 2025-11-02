@@ -35,6 +35,9 @@ pub mod window;
 // Week 12: Table Partitioning
 pub mod partition;
 
+// Week 14: Joins & Subqueries
+pub mod join;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
