@@ -61,15 +61,22 @@ A high-performance, PostgreSQL-compatible database engine written in Rust that i
 - ✅ **Partition Pruning** - Query optimization (67% scan reduction)
 - ✅ **ATTACH/DETACH** - Dynamic partition management
 
+### Week 14: Joins & Subqueries
+- ✅ **INNER/OUTER/CROSS/NATURAL** - All PostgreSQL join types
+- ✅ **Hash/Merge/Nested Loop** - Three join algorithms with auto-selection
+- ✅ **Scalar Subqueries** - Single value returns (SELECT MAX(...))
+- ✅ **EXISTS/IN** - Row existence and membership testing
+
 ## 📊 Performance
 
 - **Index speedup**: 1578x faster than sequential scan (HNSW vector index)
 - **Cache speedup**: 49x improvement on repeated queries
 - **BRIN compression**: 100-1000x smaller than B-Tree for sequential data
 - **Partition pruning**: 67% reduction in rows scanned
+- **Join algorithms**: Hash O(n+m), Merge O(n+m), Nested Loop O(n*m)
 - **Lock-free sequences**: Atomic operations with CAS loop
 - **Concurrent testing**: Validated with 10+ simultaneous threads
-- **Test suite**: 144 passing tests (0 failures)
+- **Test suite**: 151 passing tests (0 failures)
 
 ## 🏗️ Architecture
 
@@ -190,6 +197,17 @@ Demonstrates:
 - Partition pruning with 67% scan reduction
 - ATTACH/DETACH partition management
 
+### Week 14 Joins Demo
+```bash
+cargo run --example week14_joins_demo
+```
+
+Demonstrates:
+- INNER/OUTER/CROSS/NATURAL joins with employees and departments
+- Hash, Merge, and Nested Loop join algorithms
+- Join algorithm comparison and auto-selection
+- Scalar, EXISTS, and IN subqueries
+
 ## 🧪 Testing
 
 ```bash
@@ -206,17 +224,17 @@ cargo bench
 
 ## ⚠️ Current Status
 
-**Version**: 0.3.0 (Development)
+**Version**: 0.4.0 (Development)
 
-**Progress**: 71% toward full PostgreSQL compatibility (15/21 weeks complete)
+**Progress**: 76% toward full PostgreSQL compatibility (16/21 weeks complete)
 
-**Build Status**: ✅ All tests passing (144 tests, 0 failures)
+**Build Status**: ✅ All tests passing (151 tests, 0 failures)
 
-**Latest Features**: Table Partitioning (Range, List, Hash)
+**Latest Features**: Joins & Subqueries (INNER/OUTER/CROSS/NATURAL + algorithms)
 
 ## 🗺️ Roadmap
 
-### Completed (Weeks 1-13)
+### Completed (Weeks 1-14)
 - ✅ Core ACID transactions with MVCC
 - ✅ Schema system with constraints
 - ✅ Authentication & Authorization
@@ -224,13 +242,14 @@ cargo bench
 - ✅ Aggregate and Window Functions
 - ✅ Advanced Indexing (GIN, GiST, BRIN)
 - ✅ Table Partitioning (Range, List, Hash)
+- ✅ Joins & Subqueries (INNER/OUTER/CROSS/NATURAL)
 
 ### Next Up (Critical Features)
-- ⏳ **Week 14**: Joins & Subqueries (INNER, OUTER, CROSS, NATURAL)
 - ⏳ **Week 15**: CTEs (Common Table Expressions & Recursive)
 - ⏳ **Week 16**: JSON/JSONB & Array types
 - ⏳ **Week 17**: Full-Text Search
-- ⏳ **Week 18-21**: Query Planner, VACUUM, Replication, Enterprise
+- ⏳ **Week 18**: Query Planner & Statistics
+- ⏳ **Week 19-21**: VACUUM, Replication, Enterprise
 
 See [ROADMAP.md](./ROADMAP.md) for the complete 21-week plan to v1.0.0.
 
@@ -265,10 +284,10 @@ NexusQL aims to be:
 
 ## 📈 Statistics
 
-- **Code**: 5,275+ lines of production code (+700 from Week 12)
-- **Tests**: 144 unit tests + 4 comprehensive demos
+- **Code**: 5,845+ lines of production code (+570 from Week 14)
+- **Tests**: 151 unit tests + 5 comprehensive demos
 - **Documentation**: 3,500+ lines including architecture and neural tech docs
-- **Features**: 11 major subsystems (Weeks 1-13)
+- **Features**: 12 major subsystems (Weeks 1-14)
 
 ## 🔗 Links
 

@@ -6,9 +6,9 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-## Current Status (v0.3.0) - 71% Complete
+## Current Status (v0.4.0) - 76% Complete
 
-### ✅ Completed Features (Weeks 1-13)
+### ✅ Completed Features (Weeks 1-14)
 
 **Core Engine:**
 - Query parser and execution engine
@@ -42,6 +42,12 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - Partition Pruning for query optimization (67% scan reduction)
 - ATTACH/DETACH for dynamic partition management
 
+**Joins & Subqueries (Week 14):**
+- INNER, LEFT/RIGHT/FULL OUTER, CROSS, and NATURAL joins
+- Hash Join, Merge Join, and Nested Loop algorithms
+- Scalar, EXISTS, and IN/NOT IN subqueries
+- Automatic algorithm selection based on data size
+
 **Database Fundamentals (Weeks 7-9):**
 - Schema system with typed columns
 - Constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, NOT NULL)
@@ -62,7 +68,7 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-## Roadmap to v1.0.0 (6 Weeks Remaining)
+## Roadmap to v1.0.0 (5 Weeks Remaining)
 
 ### ✅ Week 11: Advanced Indexing - COMPLETED
 **Goal:** Production-grade index types for specialized workloads
@@ -108,32 +114,33 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-### Week 14: Subqueries & Joins 🎯 NEXT
+### ✅ Week 14: Subqueries & Joins - COMPLETED
 **Goal:** Complete SQL query capabilities
 
-**Features:**
-- INNER JOIN
-- LEFT/RIGHT/FULL OUTER JOIN
-- CROSS JOIN
-- NATURAL JOIN
-- SELF JOIN
-- Scalar subqueries
-- Row subqueries
-- Table subqueries
-- Correlated subqueries
-- EXISTS/NOT EXISTS
-- IN/NOT IN with subqueries
-- ALL/ANY/SOME
-- Subquery optimization
-- Hash joins, merge joins, nested loop joins
+**Completed Features:**
+- ✅ INNER JOIN
+- ✅ LEFT/RIGHT/FULL OUTER JOIN
+- ✅ CROSS JOIN
+- ✅ NATURAL JOIN
+- ✅ Scalar subqueries
+- ✅ EXISTS/NOT EXISTS
+- ✅ IN/NOT IN with subqueries
+- ✅ Hash joins, merge joins, nested loop joins
+- ✅ Automatic algorithm selection
 
-**Lines of Code:** ~600 lines
-**Research Required:** DuckDB join optimization
-**Milestone:** v0.4.0
+**Deferred to Future Versions:**
+- Correlated subqueries → v1.1.0
+- ALL/ANY/SOME operators → v1.1.0
+- Subquery optimization (caching) → v1.2.0
+- SELF JOIN (can use regular JOIN with aliases)
+
+**Lines of Code:** 570 lines
+**Tests Added:** 7 new tests (all passing)
+**Milestone:** ✅ v0.4.0 REACHED
 
 ---
 
-### Week 15: CTEs & Recursive Queries
+### Week 15: CTEs & Recursive Queries 🎯 NEXT
 **Goal:** Complex hierarchical and analytical queries
 
 **Features:**
@@ -282,14 +289,19 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - GIN, GiST, BRIN indexes ✅
 - 138 passing tests ✅
 
-### v0.3.0 (Current) - Table Partitioning ✅
+### v0.3.0 - Table Partitioning ✅
 - Range, List, Hash partitioning ✅
 - Partition pruning and management ✅
 - 144 passing tests ✅
 
-### v0.4.0-0.5.0 (Weeks 14-15) - SQL Completeness
-- Joins and subqueries
-- CTEs and recursion
+### v0.4.0 (Current) - Joins & Subqueries ✅
+- INNER/OUTER/CROSS/NATURAL joins ✅
+- Hash/Merge/Nested Loop algorithms ✅
+- 151 passing tests ✅
+
+### v0.5.0 (Week 15) - CTEs & Recursion
+- Common Table Expressions
+- Recursive queries
 
 ### v0.6.0-0.7.0 (Weeks 16-17) - Modern Data Types
 - JSON/JSONB and arrays
@@ -353,12 +365,13 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 **v0.1.0:** 3,250+ lines across 7 subsystems
 **v0.2.0:** 4,575+ lines (+1,325 from Week 11)
-**v0.3.0 (Current):** 5,275+ lines (+700 from Week 12)
+**v0.3.0:** 5,275+ lines (+700 from Week 12)
+**v0.4.0 (Current):** 5,845+ lines (+570 from Week 14)
 
-**Week 14-21 Additions:** ~4,000 lines
+**Week 15-21 Additions:** ~3,430 lines
 - Week 11: ✅ +1,325 (GIN/GiST/BRIN indexes)
 - Week 12: ✅ +700 (partitioning)
-- Week 14: +600 (joins)
+- Week 14: ✅ +570 (joins & subqueries)
 - Week 15: +400 (CTEs)
 - Week 16: +700 (JSON/arrays)
 - Week 17: +600 (full-text)
@@ -375,7 +388,8 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 **v0.1.0:** 122 unit tests + comprehensive demos
 **v0.2.0:** 138 unit tests (+12 from Week 11) + comprehensive demos
-**v0.3.0 (Current):** 144 unit tests (+6 from Week 12) + comprehensive demos
+**v0.3.0:** 144 unit tests (+6 from Week 12) + comprehensive demos
+**v0.4.0 (Current):** 151 unit tests (+7 from Week 14) + comprehensive demos
 
 **v1.0.0 Target:**
 - 500+ unit tests
@@ -444,11 +458,11 @@ See `docs/archive/` for detailed research notes.
 ## Timeline
 
 **Start Date:** Week 1 (completed)
-**Current:** Week 12 (v0.3.0)
+**Current:** Week 14 (v0.4.0)
 **Target v1.0.0:** Week 21
-**Remaining:** 6 weeks
+**Remaining:** 5 weeks
 
-**Progress:** 71% complete (15 of 21 weeks)
+**Progress:** 76% complete (16 of 21 weeks)
 
 ---
 
@@ -459,5 +473,5 @@ See `docs/archive/` for detailed research notes.
 ---
 
 **Last Updated:** November 2, 2025
-**Version:** 0.3.0
-**Next Milestone:** v0.4.0 (Joins & Subqueries)
+**Version:** 0.4.0
+**Next Milestone:** v0.5.0 (CTEs & Recursive Queries)
