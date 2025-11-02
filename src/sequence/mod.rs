@@ -60,6 +60,10 @@ impl Sequence {
             panic!("Increment cannot be zero");
         }
         self.increment = inc;
+        // Adjust current_value to account for the new increment
+        // so first nextval() returns start_value
+        self.current_value = Arc::new(AtomicI64::new(self.start_value - inc));
+        self.last_value = self.start_value - inc;
         self
     }
 

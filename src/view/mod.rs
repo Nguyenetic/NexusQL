@@ -278,6 +278,16 @@ pub fn is_auto_updateable(query: &str) -> bool {
         return false;
     }
 
+    // Check for aggregate functions
+    if query_lower.contains("count(")
+        || query_lower.contains("sum(")
+        || query_lower.contains("avg(")
+        || query_lower.contains("min(")
+        || query_lower.contains("max(")
+    {
+        return false;
+    }
+
     // Check for single FROM clause
     let from_count = query_lower.matches("from").count();
     if from_count != 1 {

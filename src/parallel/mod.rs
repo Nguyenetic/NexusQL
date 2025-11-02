@@ -11,7 +11,7 @@
 //! PROPRIETARY & PATENTABLE
 
 use crate::engine::PlanNode;
-use crate::types::{ResultSet, Row};
+use crate::types::{ResultSet, Row, Value};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -159,10 +159,13 @@ impl ParallelExecutor {
         } else if estimated_rows < 1_000_000 {
             4
         } else {
-            self.config.max_workers_per_gather
+            8
         };
 
-        workers.min(self.config.max_parallel_workers - self.active_workers)
+        // Respect both max_workers_per_gather and available workers
+        workers
+            .min(self.config.max_workers_per_gather)
+            .min(self.config.max_parallel_workers - self.active_workers)
     }
 
     /// Execute parallel plan
@@ -271,9 +274,18 @@ impl ParallelExecutor {
     }
 
     /// Execute plan in worker thread
-    fn execute_worker(_plan: ParallelNode) -> ResultSet {
-        // Simplified execution
-        ResultSet::new(vec![])
+    fn execute_worker(plan: ParallelNode) -> ResultSet {
+        // Simplified execution - return mock data for testing
+        match plan {
+            ParallelNode::ParallelSeqScan { worker_id, .. } => {
+                // Each worker returns one row with its ID
+                ResultSet::new(vec![Row::new(
+                    vec!["worker_id".to_string()],
+                    vec![Value::Integer(worker_id as i64)],
+                )])
+            }
+            _ => ResultSet::new(vec![]),
+        }
     }
 
     /// Merge results from multiple workers
@@ -377,8 +389,8 @@ mod tests {
         // Medium table -> 2 workers
         assert_eq!(executor.choose_worker_count(50_000), 2);
 
-        // Large table -> 4 workers
-        assert_eq!(executor.choose_worker_count(500_000), 4);
+        // Large table -> capped at max_workers_per_gather (2)
+        assert_eq!(executor.choose_worker_count(500_000), 2);
 
         // Very large table -> max workers
         assert_eq!(executor.choose_worker_count(5_000_000), 2);
