@@ -1,0 +1,32 @@
+# Build artifacts
+/target/
+Cargo.lock
+
+# Test databases
+*.nexus/
+demo_db/
+data/
+
+# Logs
+*.log
+*.txt
+
+# Dependencies
+deps/
+include/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Private files
+private/
+
+# Temporary
+nul
