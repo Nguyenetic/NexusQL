@@ -53,6 +53,9 @@ pub mod planner;
 // Week 19: VACUUM & Storage Management
 pub mod vacuum;
 
+// Week 20-21: Replication & Enterprise Features
+pub mod replication;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
