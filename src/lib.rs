@@ -38,6 +38,9 @@ pub mod partition;
 // Week 14: Joins & Subqueries
 pub mod join;
 
+// Week 15: CTEs & Recursive Queries
+pub mod cte;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
