@@ -44,6 +44,9 @@ pub mod cte;
 // Week 16: JSON/JSONB & Arrays
 pub mod jsonb;
 
+// Week 17: Full-Text Search
+pub mod fulltext;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
