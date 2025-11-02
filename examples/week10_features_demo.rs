@@ -141,7 +141,7 @@ fn main() -> Result<()> {
 
     // Simulate firing triggers
     println!("\n  Simulating INSERT into users table...");
-    let new_row = Row::new(vec![
+    let new_row = Row::new(vec![], vec![
         Value::Integer(1001),
         Value::Text("alice@example.com".to_string()),
     ]);
@@ -208,7 +208,7 @@ fn main() -> Result<()> {
     println!("    Rewritten: {}", rewritten);
 
     // Refresh materialized view
-    let mock_data = vec![Row::new(vec![Value::Integer(150), Value::Integer(32)])];
+    let mock_data = vec![Row::new(vec![], vec![Value::Integer(150), Value::Integer(32)])];
     view_mgr.refresh_materialized_view("user_stats", mock_data)?;
     println!("\n  ✓ Materialized view 'user_stats' refreshed");
     println!("  ✓ Views provide abstraction, security, and performance\n");

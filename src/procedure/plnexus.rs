@@ -170,7 +170,7 @@ fn parse_value(s: &str) -> Option<Value> {
 
     // Try float
     if let Ok(f) = s.parse::<f64>() {
-        return Some(Value::Float(f));
+        return Some(Value::Float(ordered_float::OrderedFloat(f)));
     }
 
     // String (remove quotes)
@@ -325,8 +325,11 @@ impl PLNexusExecutor {
                 } => {
                     // Simplified condition evaluation
                     let cond_result = eval_expression(condition, context)?;
-                    let is_true =
-                        matches!(cond_result, Value::Boolean(true) | Value::Integer(i) if i != 0);
+                    let is_true = match cond_result {
+                        Value::Boolean(true) => true,
+                        Value::Integer(i) if i != 0 => true,
+                        _ => false,
+                    };
 
                     if is_true {
                         self.execute_statements(then_block, context)?;
@@ -341,18 +344,24 @@ impl PLNexusExecutor {
                         break;
                     }
                 },
-                PLStatement::While { condition, body } => {
-                    while matches!(
-                        eval_expression(condition, context)?,
-                        Value::Boolean(true) | Value::Integer(i) if i != 0
-                    ) {
-                        self.execute_statements(body, context)?;
-                        if context.should_exit {
-                            context.should_exit = false;
-                            break;
-                        }
+                PLStatement::While { condition, body } => loop {
+                    let cond_result = eval_expression(condition, context)?;
+                    let is_true = match cond_result {
+                        Value::Boolean(true) => true,
+                        Value::Integer(i) if i != 0 => true,
+                        _ => false,
+                    };
+
+                    if !is_true {
+                        break;
                     }
-                }
+
+                    self.execute_statements(body, context)?;
+                    if context.should_exit {
+                        context.should_exit = false;
+                        break;
+                    }
+                },
                 PLStatement::For {
                     var_name,
                     start,

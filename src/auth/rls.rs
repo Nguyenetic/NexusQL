@@ -463,6 +463,7 @@ mod tests {
         // Create test rows
         let rows = vec![
             Row {
+                columns: vec![],
                 values: vec![
                     Value::Integer(1),
                     Value::Text("alice".to_string()),
@@ -470,6 +471,7 @@ mod tests {
                 ],
             },
             Row {
+                columns: vec![],
                 values: vec![
                     Value::Integer(2),
                     Value::Text("bob".to_string()),

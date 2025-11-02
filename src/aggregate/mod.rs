@@ -96,9 +96,7 @@ impl AggregateState for CountState {
     fn clone_state(&self) -> Box<dyn AggregateState> {
         Box::new(CountState { count: self.count })
     }
-}
 
-impl CountState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -138,13 +136,19 @@ impl AggregateState for SumState {
                 self.sum = Some(Value::Integer(a + b));
             }
             (Some(Value::Float(a)), Value::Float(b)) => {
-                self.sum = Some(Value::Float(a + b));
+                self.sum = Some(Value::Float(ordered_float::OrderedFloat(
+                    a.into_inner() + b.into_inner(),
+                )));
             }
             (Some(Value::Integer(a)), Value::Float(b)) => {
-                self.sum = Some(Value::Float(*a as f64 + b));
+                self.sum = Some(Value::Float(ordered_float::OrderedFloat(
+                    *a as f64 + b.into_inner(),
+                )));
             }
             (Some(Value::Float(a)), Value::Integer(b)) => {
-                self.sum = Some(Value::Float(a + *b as f64));
+                self.sum = Some(Value::Float(ordered_float::OrderedFloat(
+                    a.into_inner() + *b as f64,
+                )));
             }
             _ => {
                 return Err(NexusError::ExecutionError(
@@ -177,9 +181,7 @@ impl AggregateState for SumState {
             sum: self.sum.clone(),
         })
     }
-}
 
-impl SumState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -218,7 +220,7 @@ impl AggregateState for AvgState {
                 self.count += 1;
             }
             Value::Float(v) => {
-                self.sum += v;
+                self.sum += v.into_inner();
                 self.count += 1;
             }
             _ => {
@@ -246,7 +248,9 @@ impl AggregateState for AvgState {
         if self.count == 0 {
             Ok(Value::Null)
         } else {
-            Ok(Value::Float(self.sum / self.count as f64))
+            Ok(Value::Float(ordered_float::OrderedFloat(
+                self.sum / self.count as f64,
+            )))
         }
     }
 
@@ -256,9 +260,7 @@ impl AggregateState for AvgState {
             count: self.count,
         })
     }
-}
 
-impl AvgState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -325,9 +327,7 @@ impl AggregateState for MinState {
             min: self.min.clone(),
         })
     }
-}
 
-impl MinState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -394,9 +394,7 @@ impl AggregateState for MaxState {
             max: self.max.clone(),
         })
     }
-}
 
-impl MaxState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -476,9 +474,7 @@ impl AggregateState for StringAggState {
             delimiter: self.delimiter.clone(),
         })
     }
-}
 
-impl StringAggState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -541,9 +537,7 @@ impl AggregateState for ArrayAggState {
             values: self.values.clone(),
         })
     }
-}
 
-impl ArrayAggState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -661,7 +655,7 @@ impl AggregateManager {
                 result_values.push(state.finalize()?);
             }
 
-            results.push(Row::new(result_values));
+            results.push(Row::new(vec![], result_values));
         }
 
         Ok(results)
@@ -682,9 +676,9 @@ mod tests {
     fn test_count_aggregate() {
         let manager = AggregateManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(1)]),
-            Row::new(vec![Value::Integer(2)]),
-            Row::new(vec![Value::Integer(3)]),
+            Row::new(vec![], vec![Value::Integer(1)]),
+            Row::new(vec![], vec![Value::Integer(2)]),
+            Row::new(vec![], vec![Value::Integer(3)]),
         ];
 
         let result = manager.execute_aggregate("COUNT", 0, &rows).unwrap();
@@ -695,9 +689,9 @@ mod tests {
     fn test_sum_aggregate() {
         let manager = AggregateManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(10)]),
-            Row::new(vec![Value::Integer(20)]),
-            Row::new(vec![Value::Integer(30)]),
+            Row::new(vec![], vec![Value::Integer(10)]),
+            Row::new(vec![], vec![Value::Integer(20)]),
+            Row::new(vec![], vec![Value::Integer(30)]),
         ];
 
         let result = manager.execute_aggregate("SUM", 0, &rows).unwrap();
@@ -708,22 +702,22 @@ mod tests {
     fn test_avg_aggregate() {
         let manager = AggregateManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(10)]),
-            Row::new(vec![Value::Integer(20)]),
-            Row::new(vec![Value::Integer(30)]),
+            Row::new(vec![], vec![Value::Integer(10)]),
+            Row::new(vec![], vec![Value::Integer(20)]),
+            Row::new(vec![], vec![Value::Integer(30)]),
         ];
 
         let result = manager.execute_aggregate("AVG", 0, &rows).unwrap();
-        assert_eq!(result, Value::Float(20.0));
+        assert_eq!(result, Value::Float(ordered_float::OrderedFloat(20.0)));
     }
 
     #[test]
     fn test_min_max_aggregates() {
         let manager = AggregateManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(42)]),
-            Row::new(vec![Value::Integer(17)]),
-            Row::new(vec![Value::Integer(99)]),
+            Row::new(vec![], vec![Value::Integer(42)]),
+            Row::new(vec![], vec![Value::Integer(17)]),
+            Row::new(vec![], vec![Value::Integer(99)]),
         ];
 
         let min = manager.execute_aggregate("MIN", 0, &rows).unwrap();
@@ -737,9 +731,9 @@ mod tests {
     fn test_string_agg() {
         let manager = AggregateManager::new();
         let rows = vec![
-            Row::new(vec![Value::Text("apple".to_string())]),
-            Row::new(vec![Value::Text("banana".to_string())]),
-            Row::new(vec![Value::Text("cherry".to_string())]),
+            Row::new(vec![], vec![Value::Text("apple".to_string())]),
+            Row::new(vec![], vec![Value::Text("banana".to_string())]),
+            Row::new(vec![], vec![Value::Text("cherry".to_string())]),
         ];
 
         let result = manager.execute_aggregate("STRING_AGG", 0, &rows).unwrap();
@@ -752,10 +746,22 @@ mod tests {
 
         // Data: (category, amount)
         let rows = vec![
-            Row::new(vec![Value::Text("A".to_string()), Value::Integer(10)]),
-            Row::new(vec![Value::Text("B".to_string()), Value::Integer(20)]),
-            Row::new(vec![Value::Text("A".to_string()), Value::Integer(15)]),
-            Row::new(vec![Value::Text("B".to_string()), Value::Integer(25)]),
+            Row::new(
+                vec![],
+                vec![Value::Text("A".to_string()), Value::Integer(10)],
+            ),
+            Row::new(
+                vec![],
+                vec![Value::Text("B".to_string()), Value::Integer(20)],
+            ),
+            Row::new(
+                vec![],
+                vec![Value::Text("A".to_string()), Value::Integer(15)],
+            ),
+            Row::new(
+                vec![],
+                vec![Value::Text("B".to_string()), Value::Integer(25)],
+            ),
         ];
 
         // GROUP BY category, SUM(amount), COUNT(*)

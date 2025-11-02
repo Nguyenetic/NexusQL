@@ -29,11 +29,11 @@ fn main() -> Result<()> {
 
     // Sample sales data
     let sales = vec![
-        Row::new(vec![Value::Integer(100)]),
-        Row::new(vec![Value::Integer(250)]),
-        Row::new(vec![Value::Integer(175)]),
-        Row::new(vec![Value::Integer(300)]),
-        Row::new(vec![Value::Integer(125)]),
+        Row::new(vec![], vec![Value::Integer(100)]),
+        Row::new(vec![], vec![Value::Integer(250)]),
+        Row::new(vec![], vec![Value::Integer(175)]),
+        Row::new(vec![], vec![Value::Integer(300)]),
+        Row::new(vec![], vec![Value::Integer(125)]),
     ];
 
     println!("  Sales data: [100, 250, 175, 300, 125]\n");
@@ -53,9 +53,9 @@ fn main() -> Result<()> {
 
     // STRING_AGG example
     let products = vec![
-        Row::new(vec![Value::Text("Laptop".to_string())]),
-        Row::new(vec![Value::Text("Mouse".to_string())]),
-        Row::new(vec![Value::Text("Keyboard".to_string())]),
+        Row::new(vec![], vec![Value::Text("Laptop".to_string())]),
+        Row::new(vec![], vec![Value::Text("Mouse".to_string())]),
+        Row::new(vec![], vec![Value::Text("Keyboard".to_string())]),
     ];
 
     let product_list = agg_manager.execute_aggregate("STRING_AGG", 0, &products)?;
@@ -63,9 +63,9 @@ fn main() -> Result<()> {
 
     // ARRAY_AGG example
     let scores = vec![
-        Row::new(vec![Value::Integer(95)]),
-        Row::new(vec![Value::Integer(87)]),
-        Row::new(vec![Value::Integer(92)]),
+        Row::new(vec![], vec![Value::Integer(95)]),
+        Row::new(vec![], vec![Value::Integer(87)]),
+        Row::new(vec![], vec![Value::Integer(92)]),
     ];
 
     let score_array = agg_manager.execute_aggregate("ARRAY_AGG", 0, &scores)?;
@@ -81,12 +81,12 @@ fn main() -> Result<()> {
 
     // Sales by region: (region, amount)
     let regional_sales = vec![
-        Row::new(vec![Value::Text("North".to_string()), Value::Integer(1000)]),
-        Row::new(vec![Value::Text("South".to_string()), Value::Integer(1500)]),
-        Row::new(vec![Value::Text("North".to_string()), Value::Integer(1200)]),
-        Row::new(vec![Value::Text("East".to_string()), Value::Integer(800)]),
-        Row::new(vec![Value::Text("South".to_string()), Value::Integer(1800)]),
-        Row::new(vec![Value::Text("East".to_string()), Value::Integer(900)]),
+        Row::new(vec![], vec![Value::Text("North".to_string()), Value::Integer(1000)]),
+        Row::new(vec![], vec![Value::Text("South".to_string()), Value::Integer(1500)]),
+        Row::new(vec![], vec![Value::Text("North".to_string()), Value::Integer(1200)]),
+        Row::new(vec![], vec![Value::Text("East".to_string()), Value::Integer(800)]),
+        Row::new(vec![], vec![Value::Text("South".to_string()), Value::Integer(1800)]),
+        Row::new(vec![], vec![Value::Text("East".to_string()), Value::Integer(900)]),
     ];
 
     println!("  Regional Sales Data:");
@@ -125,16 +125,16 @@ fn main() -> Result<()> {
 
     // Employee salary data
     let salaries = vec![
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Text("Alice".to_string()),
             Value::Integer(75000),
         ]),
-        Row::new(vec![Value::Text("Bob".to_string()), Value::Integer(65000)]),
-        Row::new(vec![
+        Row::new(vec![], vec![Value::Text("Bob".to_string()), Value::Integer(65000)]),
+        Row::new(vec![], vec![
             Value::Text("Carol".to_string()),
             Value::Integer(80000),
         ]),
-        Row::new(vec![Value::Text("Dave".to_string()), Value::Integer(70000)]),
+        Row::new(vec![], vec![Value::Text("Dave".to_string()), Value::Integer(70000)]),
     ];
 
     println!("  Employee Salaries:");
@@ -162,11 +162,11 @@ fn main() -> Result<()> {
 
     // Test scores with ties
     let test_scores = vec![
-        Row::new(vec![Value::Text("Alice".to_string()), Value::Integer(95)]),
-        Row::new(vec![Value::Text("Bob".to_string()), Value::Integer(87)]),
-        Row::new(vec![Value::Text("Carol".to_string()), Value::Integer(95)]),
-        Row::new(vec![Value::Text("Dave".to_string()), Value::Integer(82)]),
-        Row::new(vec![Value::Text("Eve".to_string()), Value::Integer(90)]),
+        Row::new(vec![], vec![Value::Text("Alice".to_string()), Value::Integer(95)]),
+        Row::new(vec![], vec![Value::Text("Bob".to_string()), Value::Integer(87)]),
+        Row::new(vec![], vec![Value::Text("Carol".to_string()), Value::Integer(95)]),
+        Row::new(vec![], vec![Value::Text("Dave".to_string()), Value::Integer(82)]),
+        Row::new(vec![], vec![Value::Text("Eve".to_string()), Value::Integer(90)]),
     ];
 
     println!("  Test Scores:");
@@ -204,11 +204,11 @@ fn main() -> Result<()> {
 
     // Stock prices over time
     let stock_prices = vec![
-        Row::new(vec![Value::Text("Day 1".to_string()), Value::Integer(100)]),
-        Row::new(vec![Value::Text("Day 2".to_string()), Value::Integer(105)]),
-        Row::new(vec![Value::Text("Day 3".to_string()), Value::Integer(102)]),
-        Row::new(vec![Value::Text("Day 4".to_string()), Value::Integer(108)]),
-        Row::new(vec![Value::Text("Day 5".to_string()), Value::Integer(110)]),
+        Row::new(vec![], vec![Value::Text("Day 1".to_string()), Value::Integer(100)]),
+        Row::new(vec![], vec![Value::Text("Day 2".to_string()), Value::Integer(105)]),
+        Row::new(vec![], vec![Value::Text("Day 3".to_string()), Value::Integer(102)]),
+        Row::new(vec![], vec![Value::Text("Day 4".to_string()), Value::Integer(108)]),
+        Row::new(vec![], vec![Value::Text("Day 5".to_string()), Value::Integer(110)]),
     ];
 
     println!("  Stock Prices:");
@@ -255,22 +255,22 @@ fn main() -> Result<()> {
 
     // Sales by department and employee
     let dept_sales = vec![
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Text("Sales".to_string()),
             Value::Text("Alice".to_string()),
             Value::Integer(50000),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Text("Sales".to_string()),
             Value::Text("Bob".to_string()),
             Value::Integer(45000),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Text("Engineering".to_string()),
             Value::Text("Carol".to_string()),
             Value::Integer(70000),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Text("Engineering".to_string()),
             Value::Text("Dave".to_string()),
             Value::Integer(65000),
@@ -312,31 +312,31 @@ fn main() -> Result<()> {
 
     // Order data: (customer_id, order_date, amount, category)
     let orders = vec![
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Integer(1),
             Value::Text("2024-01".to_string()),
             Value::Integer(100),
             Value::Text("Electronics".to_string()),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Integer(2),
             Value::Text("2024-01".to_string()),
             Value::Integer(150),
             Value::Text("Books".to_string()),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Integer(1),
             Value::Text("2024-02".to_string()),
             Value::Integer(200),
             Value::Text("Electronics".to_string()),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Integer(3),
             Value::Text("2024-01".to_string()),
             Value::Integer(75),
             Value::Text("Electronics".to_string()),
         ]),
-        Row::new(vec![
+        Row::new(vec![], vec![
             Value::Integer(2),
             Value::Text("2024-02".to_string()),
             Value::Integer(120),

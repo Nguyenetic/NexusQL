@@ -247,7 +247,9 @@ impl DataType {
             (DataType::Boolean, Value::Boolean(_)) => Ok(value),
 
             // Integer to Float
-            (DataType::Float | DataType::Double, Value::Integer(i)) => Ok(Value::Float(*i as f64)),
+            (DataType::Float | DataType::Double, Value::Integer(i)) => {
+                Ok(Value::Float(ordered_float::OrderedFloat(*i as f64)))
+            }
 
             // Text with length check for VARCHAR/CHAR
             (DataType::Varchar(max_len), Value::Text(s))

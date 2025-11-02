@@ -424,13 +424,13 @@ impl WindowFunction for WindowSumFunction {
             if let Some(value) = partition[i].values.get(col_idx) {
                 match value {
                     Value::Integer(v) => sum += *v as f64,
-                    Value::Float(v) => sum += v,
+                    Value::Float(v) => sum += v.into_inner(),
                     _ => {}
                 }
             }
         }
 
-        Ok(Value::Float(sum))
+        Ok(Value::Float(ordered_float::OrderedFloat(sum)))
     }
 
     fn name(&self) -> &str {
@@ -562,7 +562,7 @@ impl WindowManager {
             let val_b = b.values.get(col_idx);
 
             let cmp = match (val_a, val_b) {
-                (Some(a), Some(b)) => a.cmp(b),
+                (Some(a), Some(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
                 (Some(_), None) => Ordering::Greater,
                 (None, Some(_)) => Ordering::Less,
                 (None, None) => Ordering::Equal,
@@ -591,9 +591,9 @@ mod tests {
     fn test_row_number() {
         let manager = WindowManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(1)]),
-            Row::new(vec![Value::Integer(2)]),
-            Row::new(vec![Value::Integer(3)]),
+            Row::new(vec![], vec![Value::Integer(1)]),
+            Row::new(vec![], vec![Value::Integer(2)]),
+            Row::new(vec![], vec![Value::Integer(3)]),
         ];
 
         let spec = WindowSpec::new();
@@ -610,10 +610,10 @@ mod tests {
     fn test_rank() {
         let manager = WindowManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(10)]),
-            Row::new(vec![Value::Integer(20)]),
-            Row::new(vec![Value::Integer(20)]),
-            Row::new(vec![Value::Integer(30)]),
+            Row::new(vec![], vec![Value::Integer(10)]),
+            Row::new(vec![], vec![Value::Integer(20)]),
+            Row::new(vec![], vec![Value::Integer(20)]),
+            Row::new(vec![], vec![Value::Integer(30)]),
         ];
 
         let spec = WindowSpec::new().order_by(vec![(0, true)]);
@@ -631,9 +631,9 @@ mod tests {
     fn test_lag_lead() {
         let manager = WindowManager::new();
         let rows = vec![
-            Row::new(vec![Value::Integer(10)]),
-            Row::new(vec![Value::Integer(20)]),
-            Row::new(vec![Value::Integer(30)]),
+            Row::new(vec![], vec![Value::Integer(10)]),
+            Row::new(vec![], vec![Value::Integer(20)]),
+            Row::new(vec![], vec![Value::Integer(30)]),
         ];
 
         let spec = WindowSpec::new();
@@ -659,10 +659,22 @@ mod tests {
     fn test_partitioned_row_number() {
         let manager = WindowManager::new();
         let rows = vec![
-            Row::new(vec![Value::Text("A".to_string()), Value::Integer(1)]),
-            Row::new(vec![Value::Text("A".to_string()), Value::Integer(2)]),
-            Row::new(vec![Value::Text("B".to_string()), Value::Integer(1)]),
-            Row::new(vec![Value::Text("B".to_string()), Value::Integer(2)]),
+            Row::new(
+                vec![],
+                vec![Value::Text("A".to_string()), Value::Integer(1)],
+            ),
+            Row::new(
+                vec![],
+                vec![Value::Text("A".to_string()), Value::Integer(2)],
+            ),
+            Row::new(
+                vec![],
+                vec![Value::Text("B".to_string()), Value::Integer(1)],
+            ),
+            Row::new(
+                vec![],
+                vec![Value::Text("B".to_string()), Value::Integer(2)],
+            ),
         ];
 
         let spec = WindowSpec::new().partition_by(vec![0]);

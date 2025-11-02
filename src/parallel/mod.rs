@@ -402,6 +402,7 @@ mod tests {
     #[test]
     fn test_parallel_plan_creation() {
         let config = ParallelConfig::default();
+        let max_workers = config.max_workers_per_gather;
         let executor = ParallelExecutor::new(config);
 
         let plan = PlanNode::Scan {
@@ -419,7 +420,7 @@ mod tests {
         match parallel_plan {
             ParallelNode::Gather { workers, .. } => {
                 assert!(workers > 0);
-                assert!(workers <= config.max_workers_per_gather);
+                assert!(workers <= max_workers);
             }
             _ => panic!("Expected Gather node"),
         }

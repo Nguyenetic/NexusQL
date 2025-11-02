@@ -384,6 +384,7 @@ mod tests {
 
         // Simulate INSERT
         let row = Row {
+            columns: vec![],
             values: vec![
                 Value::Integer(1),
                 Value::Text("Alice".to_string()),

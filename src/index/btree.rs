@@ -4,6 +4,7 @@
 //! This is simpler and more efficient than implementing a custom B-Tree from scratch.
 
 use crate::types::{Row, Value};
+use ordered_float::OrderedFloat;
 use std::collections::BTreeMap;
 
 /// B-Tree index for a single column
@@ -27,37 +28,17 @@ pub struct BTreeIndex {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IndexKey {
     Integer(i64),
-    Float(OrderedFloat),
+    Float(OrderedFloat<f64>),
     Text(String),
     Boolean(bool),
     Null,
-}
-
-/// Wrapper for f64 that implements Ord (needed for BTreeMap)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OrderedFloat(f64);
-
-impl Eq for OrderedFloat {}
-
-impl PartialOrd for OrderedFloat {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for OrderedFloat {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0
-            .partial_cmp(&other.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }
 }
 
 impl From<&Value> for IndexKey {
     fn from(value: &Value) -> Self {
         match value {
             Value::Integer(i) => IndexKey::Integer(*i),
-            Value::Float(f) => IndexKey::Float(OrderedFloat(*f)),
+            Value::Float(f) => IndexKey::Float(*f),
             Value::Text(s) => IndexKey::Text(s.clone()),
             Value::Boolean(b) => IndexKey::Boolean(*b),
             Value::Null => IndexKey::Null,
