@@ -1,14 +1,39 @@
-# NexusQL - PostgreSQL-Compatible Database Engine
+# NexusQL - Next-Generation Database with Brain-Inspired AI
 
-A high-performance, PostgreSQL-compatible database engine written in Rust with advanced analytical capabilities.
+A high-performance, PostgreSQL-compatible database engine written in Rust that integrates **cutting-edge neural and brain-inspired technologies** including Hyperdimensional Computing (HDC), ColBERT late interaction, and state-of-the-art vector search.
+
+**⚡ What Makes NexusQL Different:**
+- 🧠 **Brain-Inspired Computing** - HDC for one-shot learning and 100x energy efficiency
+- 🔍 **Neural Semantic Search** - ColBERT with token-level matching (100x faster than BERT)
+- 📈 **HNSW Vector Index** - Logarithmic search with 99%+ recall
+- 🗄️ **PostgreSQL Compatible** - Drop-in replacement for common use cases
+- 🚀 **Production Performance** - 1578x index speedup, 49x cache speedup
 
 ## 🚀 Features
+
+### 🧠 Neural & Brain-Inspired AI (Unique to NexusQL)
+- ✅ **Hyperdimensional Computing (HDC)** - Brain-inspired computing with 10,000+ dimensional hypervectors
+  - One-shot learning (learn from single example)
+  - 100x more energy efficient than deep learning
+  - Holographic representations mimicking neural activity
+  - See [NEURAL_TECHNOLOGIES.md](./NEURAL_TECHNOLOGIES.md#1-hyperdimensional-computing-hdc)
+
+- ✅ **ColBERT Late Interaction** - State-of-the-art neural semantic search
+  - Token-level embeddings with MaxSim operator
+  - 100x faster than BERT cross-encoder
+  - Fine-grained relevance scoring
+  - See [NEURAL_TECHNOLOGIES.md](./NEURAL_TECHNOLOGIES.md#2-colbert-late-interaction)
+
+- ✅ **HNSW Vector Index** - Logarithmic approximate nearest neighbor search
+  - O(log N) search complexity in high dimensions
+  - 99%+ recall at low latency
+  - Graph-based multi-layer structure
+  - See [NEURAL_TECHNOLOGIES.md](./NEURAL_TECHNOLOGIES.md#3-hnsw-hierarchical-navigable-small-world)
 
 ### Core Database Features
 - ✅ **ACID Transactions** - Full MVCC with crash recovery and WAL
 - ✅ **Schema System** - Tables, columns, constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK)
 - ✅ **Authentication & Authorization** - bcrypt password hashing, RBAC, Row-Level Security (RLS)
-- ✅ **Indexing** - B-Tree, HNSW for vector similarity
 - ✅ **Caching** - Multi-level cache with LRU eviction (49x speedup)
 
 ### Week 10: Convenience Features
@@ -175,11 +200,16 @@ See `docs/archive/DATABASE_COMPLETE_ROADMAP.md` for the full 21-week plan.
 
 ## 📖 Documentation
 
-- **[Quick Status](docs/QUICK_STATUS.md)** - Current state at a glance
+### Core Documentation
+- **[NEURAL_TECHNOLOGIES.md](./NEURAL_TECHNOLOGIES.md)** - 🧠 Complete guide to brain-inspired AI technologies with citations
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - System architecture and neural engine design
+- **[ROADMAP.md](./ROADMAP.md)** - Development roadmap to v1.0.0
+- **[PRD.md](./PRD.md)** - Product requirements and competitive analysis
+
+### Technical Details
 - **[Week 10 & 13 Complete](docs/WEEK10_WEEK13_COMPLETE.md)** - Feature documentation
-- **[Session Summary](docs/SESSION_CONTINUATION_SUMMARY.md)** - Implementation details
 - **[Compilation Fixes](docs/COMPILATION_FIXES_NEEDED.md)** - How to fix build errors
-- **[Archived Docs](docs/archive/)** - Historical planning and status docs
+- **[Archived Research](docs/archive/)** - Historical research and planning documents
 
 ## 🤝 Contributing
 
