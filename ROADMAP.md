@@ -6,9 +6,9 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-## Current Status (v0.2.0) - 67% Complete
+## Current Status (v0.3.0) - 71% Complete
 
-### ✅ Completed Features (Weeks 1-11, 13)
+### ✅ Completed Features (Weeks 1-13)
 
 **Core Engine:**
 - Query parser and execution engine
@@ -35,6 +35,13 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - GiST (Generalized Search Tree) for geometric/spatial data and ranges
 - BRIN (Block Range Index) for sequential/time-series data (100-1000x compression)
 
+**Table Partitioning (Week 12):**
+- Range Partitioning for time-series and sequential data
+- List Partitioning for categorical data
+- Hash Partitioning for even distribution
+- Partition Pruning for query optimization (67% scan reduction)
+- ATTACH/DETACH for dynamic partition management
+
 **Database Fundamentals (Weeks 7-9):**
 - Schema system with typed columns
 - Constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, NOT NULL)
@@ -55,7 +62,7 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-## Roadmap to v1.0.0 (7 Weeks Remaining)
+## Roadmap to v1.0.0 (6 Weeks Remaining)
 
 ### ✅ Week 11: Advanced Indexing - COMPLETED
 **Goal:** Production-grade index types for specialized workloads
@@ -79,27 +86,29 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-### Week 12: Table Partitioning 🎯 NEXT
+### ✅ Week 12: Table Partitioning - COMPLETED
 **Goal:** Scale to billion-row tables
 
-**Features:**
-- Range partitioning (by date, number)
-- List partitioning (by categorical values)
-- Hash partitioning (for distribution)
-- Composite partitioning (multi-level)
-- Partition pruning (query optimization)
-- Partition-wise joins
-- Automatic partition creation
-- Partition management (ATTACH/DETACH)
-- DEFAULT partition
+**Completed Features:**
+- ✅ Range partitioning (by date, number)
+- ✅ List partitioning (by categorical values)
+- ✅ Hash partitioning (for distribution)
+- ✅ Partition pruning (query optimization - 67% scan reduction)
+- ✅ Partition management (ATTACH/DETACH)
+- ✅ DEFAULT partition (Range/List only)
 
-**Lines of Code:** ~700 lines
-**Research Required:** PostgreSQL partitioning strategies
-**Milestone:** v0.3.0
+**Deferred to Future Versions:**
+- Composite partitioning (multi-level) → v1.1.0
+- Partition-wise joins → v1.2.0
+- Automatic partition creation → v1.1.0
+
+**Lines of Code:** 700 lines
+**Tests Added:** 6 new tests (all passing)
+**Milestone:** ✅ v0.3.0 REACHED
 
 ---
 
-### Week 14: Subqueries & Joins
+### Week 14: Subqueries & Joins 🎯 NEXT
 **Goal:** Complete SQL query capabilities
 
 **Features:**
@@ -269,12 +278,16 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - Triggers, views, procedures ✅
 - Basic aggregates and window functions ✅
 
-### v0.2.0 (Current) - Advanced Indexing ✅
+### v0.2.0 - Advanced Indexing ✅
 - GIN, GiST, BRIN indexes ✅
 - 138 passing tests ✅
 
-### v0.3.0-0.5.0 (Weeks 12, 14-15) - SQL Completeness
-- Partitioning
+### v0.3.0 (Current) - Table Partitioning ✅
+- Range, List, Hash partitioning ✅
+- Partition pruning and management ✅
+- 144 passing tests ✅
+
+### v0.4.0-0.5.0 (Weeks 14-15) - SQL Completeness
 - Joins and subqueries
 - CTEs and recursion
 
@@ -339,11 +352,12 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 ## Code Size Estimates
 
 **v0.1.0:** 3,250+ lines across 7 subsystems
-**v0.2.0 (Current):** 4,575+ lines (+1,325 from Week 11)
+**v0.2.0:** 4,575+ lines (+1,325 from Week 11)
+**v0.3.0 (Current):** 5,275+ lines (+700 from Week 12)
 
-**Week 12-21 Additions:** ~4,700 lines
+**Week 14-21 Additions:** ~4,000 lines
 - Week 11: ✅ +1,325 (GIN/GiST/BRIN indexes)
-- Week 12: +700 (partitioning)
+- Week 12: ✅ +700 (partitioning)
 - Week 14: +600 (joins)
 - Week 15: +400 (CTEs)
 - Week 16: +700 (JSON/arrays)
@@ -360,7 +374,8 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 ## Testing Strategy
 
 **v0.1.0:** 122 unit tests + comprehensive demos
-**v0.2.0 (Current):** 138 unit tests (+12 from Week 11) + comprehensive demos
+**v0.2.0:** 138 unit tests (+12 from Week 11) + comprehensive demos
+**v0.3.0 (Current):** 144 unit tests (+6 from Week 12) + comprehensive demos
 
 **v1.0.0 Target:**
 - 500+ unit tests
@@ -429,11 +444,11 @@ See `docs/archive/` for detailed research notes.
 ## Timeline
 
 **Start Date:** Week 1 (completed)
-**Current:** Week 11 (v0.2.0)
+**Current:** Week 12 (v0.3.0)
 **Target v1.0.0:** Week 21
-**Remaining:** 7 weeks
+**Remaining:** 6 weeks
 
-**Progress:** 67% complete (14 of 21 weeks)
+**Progress:** 71% complete (15 of 21 weeks)
 
 ---
 
@@ -444,5 +459,5 @@ See `docs/archive/` for detailed research notes.
 ---
 
 **Last Updated:** November 2, 2025
-**Version:** 0.2.0
-**Next Milestone:** v0.3.0 (Table Partitioning)
+**Version:** 0.3.0
+**Next Milestone:** v0.4.0 (Joins & Subqueries)

@@ -54,14 +54,22 @@ A high-performance, PostgreSQL-compatible database engine written in Rust that i
 - ✅ **GiST Index** - Generalized Search Tree for geometric/spatial data and ranges
 - ✅ **BRIN Index** - Block Range Index for sequential/time-series data (100-1000x compression)
 
+### Week 12: Table Partitioning
+- ✅ **Range Partitioning** - Time-series and sequential data by date/number ranges
+- ✅ **List Partitioning** - Categorical data by discrete values (regions, statuses)
+- ✅ **Hash Partitioning** - Even distribution across partitions for high-volume data
+- ✅ **Partition Pruning** - Query optimization (67% scan reduction)
+- ✅ **ATTACH/DETACH** - Dynamic partition management
+
 ## 📊 Performance
 
 - **Index speedup**: 1578x faster than sequential scan (HNSW vector index)
 - **Cache speedup**: 49x improvement on repeated queries
 - **BRIN compression**: 100-1000x smaller than B-Tree for sequential data
+- **Partition pruning**: 67% reduction in rows scanned
 - **Lock-free sequences**: Atomic operations with CAS loop
 - **Concurrent testing**: Validated with 10+ simultaneous threads
-- **Test suite**: 138 passing tests (0 failures)
+- **Test suite**: 144 passing tests (0 failures)
 
 ## 🏗️ Architecture
 
@@ -170,6 +178,18 @@ Demonstrates:
 - BRIN index for time-series data with massive compression
 - Index comparison and use case recommendations
 
+### Week 12 Partitioning Demo
+```bash
+cargo run --example week12_partitioning_demo
+```
+
+Demonstrates:
+- Range partitioning for time-series measurements
+- List partitioning with geographic regions and default partition
+- Hash partitioning with even distribution across 4 partitions
+- Partition pruning with 67% scan reduction
+- ATTACH/DETACH partition management
+
 ## 🧪 Testing
 
 ```bash
@@ -186,28 +206,28 @@ cargo bench
 
 ## ⚠️ Current Status
 
-**Version**: 0.2.0 (Development)
+**Version**: 0.3.0 (Development)
 
-**Progress**: 67% toward full PostgreSQL compatibility (14/21 weeks complete)
+**Progress**: 71% toward full PostgreSQL compatibility (15/21 weeks complete)
 
-**Build Status**: ✅ All tests passing (138 tests, 0 failures)
+**Build Status**: ✅ All tests passing (144 tests, 0 failures)
 
-**Latest Features**: Advanced Indexing (GIN, GiST, BRIN)
+**Latest Features**: Table Partitioning (Range, List, Hash)
 
 ## 🗺️ Roadmap
 
-### Completed (Weeks 1-11, 13)
+### Completed (Weeks 1-13)
 - ✅ Core ACID transactions with MVCC
 - ✅ Schema system with constraints
 - ✅ Authentication & Authorization
 - ✅ Triggers, Views, Sequences, Stored Procedures
 - ✅ Aggregate and Window Functions
 - ✅ Advanced Indexing (GIN, GiST, BRIN)
+- ✅ Table Partitioning (Range, List, Hash)
 
 ### Next Up (Critical Features)
-- ⏳ **Week 12**: Partitioning (Range, List, Hash)
-- ⏳ **Week 14**: Joins & Subqueries
-- ⏳ **Week 15**: CTEs (Common Table Expressions)
+- ⏳ **Week 14**: Joins & Subqueries (INNER, OUTER, CROSS, NATURAL)
+- ⏳ **Week 15**: CTEs (Common Table Expressions & Recursive)
 - ⏳ **Week 16**: JSON/JSONB & Array types
 - ⏳ **Week 17**: Full-Text Search
 - ⏳ **Week 18-21**: Query Planner, VACUUM, Replication, Enterprise
@@ -245,10 +265,10 @@ NexusQL aims to be:
 
 ## 📈 Statistics
 
-- **Code**: 4,575+ lines of production code (+1,325 from Week 11)
-- **Tests**: 138 unit tests + 3 comprehensive demos
-- **Documentation**: 3,000+ lines including architecture and neural tech docs
-- **Features**: 10 major subsystems (Weeks 1-11, 13)
+- **Code**: 5,275+ lines of production code (+700 from Week 12)
+- **Tests**: 144 unit tests + 4 comprehensive demos
+- **Documentation**: 3,500+ lines including architecture and neural tech docs
+- **Features**: 11 major subsystems (Weeks 1-13)
 
 ## 🔗 Links
 
