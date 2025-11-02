@@ -32,6 +32,9 @@ pub mod view;
 pub mod aggregate;
 pub mod window;
 
+// Week 12: Table Partitioning
+pub mod partition;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
