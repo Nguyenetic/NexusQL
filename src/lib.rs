@@ -50,6 +50,9 @@ pub mod fulltext;
 // Week 18: Query Planner & Statistics
 pub mod planner;
 
+// Week 19: VACUUM & Storage Management
+pub mod vacuum;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
