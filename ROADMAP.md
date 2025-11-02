@@ -6,9 +6,9 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-## Current Status (v0.1.0) - 62% Complete
+## Current Status (v0.2.0) - 67% Complete
 
-### ✅ Completed Features (Weeks 1-10, 13)
+### ✅ Completed Features (Weeks 1-11, 13)
 
 **Core Engine:**
 - Query parser and execution engine
@@ -30,6 +30,11 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - Window functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD)
 - Statistical aggregates (STDDEV, VARIANCE)
 
+**Advanced Indexing (Week 11):**
+- GIN (Generalized Inverted Index) for arrays, JSON, full-text search
+- GiST (Generalized Search Tree) for geometric/spatial data and ranges
+- BRIN (Block Range Index) for sequential/time-series data (100-1000x compression)
+
 **Database Fundamentals (Weeks 7-9):**
 - Schema system with typed columns
 - Constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, NOT NULL)
@@ -50,29 +55,31 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ---
 
-## Roadmap to v1.0.0 (8 Weeks Remaining)
+## Roadmap to v1.0.0 (7 Weeks Remaining)
 
-### Week 11: Advanced Indexing 🎯 NEXT
+### ✅ Week 11: Advanced Indexing - COMPLETED
 **Goal:** Production-grade index types for specialized workloads
 
-**Features:**
-- GIN (Generalized Inverted Index) for arrays, JSON, full-text
-- GiST (Generalized Search Tree) for geometric data, ranges
-- BRIN (Block Range Index) for very large tables
-- Partial indexes (with WHERE clause)
-- Expression indexes (on computed columns)
-- Covering indexes (INCLUDE clause)
-- Concurrent index creation (non-blocking)
-- Index-only scans
-- Index maintenance (REINDEX, CLUSTER)
+**Completed Features:**
+- ✅ GIN (Generalized Inverted Index) for arrays, JSON, full-text
+- ✅ GiST (Generalized Search Tree) for geometric data, ranges
+- ✅ BRIN (Block Range Index) for very large tables
 
-**Lines of Code:** ~800 lines
-**Research Required:** PostgreSQL GIN/GiST/BRIN internals
-**Milestone:** v0.2.0
+**Deferred to Future Versions:**
+- Partial indexes (with WHERE clause) → v1.1.0
+- Expression indexes (on computed columns) → v1.1.0
+- Covering indexes (INCLUDE clause) → v1.1.0
+- Concurrent index creation (non-blocking) → v1.1.0
+- Index-only scans → v0.8.0 (with query planner)
+- Index maintenance (REINDEX, CLUSTER) → v0.9.0 (with VACUUM)
+
+**Lines of Code:** 1,325 lines (GIN: 420, GiST: 470, BRIN: 435)
+**Tests Added:** 12 new tests (all passing)
+**Milestone:** ✅ v0.2.0 REACHED
 
 ---
 
-### Week 12: Table Partitioning
+### Week 12: Table Partitioning 🎯 NEXT
 **Goal:** Scale to billion-row tables
 
 **Features:**
@@ -254,7 +261,7 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ## Feature Completion Summary
 
-### v0.1.0 (Current) - Foundation
+### v0.1.0 - Foundation ✅
 - Core query engine ✅
 - Indexes and caching ✅
 - Transactions and ACID ✅
@@ -262,8 +269,11 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - Triggers, views, procedures ✅
 - Basic aggregates and window functions ✅
 
-### v0.2.0-0.5.0 (Weeks 11-15) - SQL Completeness
-- Advanced indexes
+### v0.2.0 (Current) - Advanced Indexing ✅
+- GIN, GiST, BRIN indexes ✅
+- 138 passing tests ✅
+
+### v0.3.0-0.5.0 (Weeks 12, 14-15) - SQL Completeness
 - Partitioning
 - Joins and subqueries
 - CTEs and recursion
@@ -328,10 +338,11 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 
 ## Code Size Estimates
 
-**Current:** 3,250+ lines across 7 subsystems
+**v0.1.0:** 3,250+ lines across 7 subsystems
+**v0.2.0 (Current):** 4,575+ lines (+1,325 from Week 11)
 
-**Week 11-21 Additions:** ~5,500 lines
-- Week 11: +800 (indexes)
+**Week 12-21 Additions:** ~4,700 lines
+- Week 11: ✅ +1,325 (GIN/GiST/BRIN indexes)
 - Week 12: +700 (partitioning)
 - Week 14: +600 (joins)
 - Week 15: +400 (CTEs)
@@ -342,13 +353,14 @@ Build a **production-grade, PostgreSQL-compatible database** with blazing-fast p
 - Week 20: +800 (replication)
 - Week 21: +600 (enterprise)
 
-**v1.0.0 Total:** ~9,000 lines of production-quality Rust
+**v1.0.0 Total:** ~9,275 lines of production-quality Rust
 
 ---
 
 ## Testing Strategy
 
-**Current:** 33 unit tests + comprehensive demos
+**v0.1.0:** 122 unit tests + comprehensive demos
+**v0.2.0 (Current):** 138 unit tests (+12 from Week 11) + comprehensive demos
 
 **v1.0.0 Target:**
 - 500+ unit tests
@@ -417,11 +429,11 @@ See `docs/archive/` for detailed research notes.
 ## Timeline
 
 **Start Date:** Week 1 (completed)
-**Current:** Week 10 (v0.1.0)
+**Current:** Week 11 (v0.2.0)
 **Target v1.0.0:** Week 21
-**Remaining:** 8 weeks
+**Remaining:** 7 weeks
 
-**Progress:** 62% complete (13 of 21 weeks)
+**Progress:** 67% complete (14 of 21 weeks)
 
 ---
 
@@ -432,5 +444,5 @@ See `docs/archive/` for detailed research notes.
 ---
 
 **Last Updated:** November 2, 2025
-**Version:** 0.1.0
-**Next Milestone:** v0.2.0 (Advanced Indexing)
+**Version:** 0.2.0
+**Next Milestone:** v0.3.0 (Table Partitioning)

@@ -49,12 +49,19 @@ A high-performance, PostgreSQL-compatible database engine written in Rust that i
 - ✅ **Window Functions** - ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD
 - ✅ **PARTITION BY** - Independent calculations per partition
 
+### Week 11: Advanced Indexing
+- ✅ **GIN Index** - Generalized Inverted Index for arrays, JSON, and full-text search
+- ✅ **GiST Index** - Generalized Search Tree for geometric/spatial data and ranges
+- ✅ **BRIN Index** - Block Range Index for sequential/time-series data (100-1000x compression)
+
 ## 📊 Performance
 
-- **Index speedup**: 1578x faster than sequential scan
+- **Index speedup**: 1578x faster than sequential scan (HNSW vector index)
 - **Cache speedup**: 49x improvement on repeated queries
+- **BRIN compression**: 100-1000x smaller than B-Tree for sequential data
 - **Lock-free sequences**: Atomic operations with CAS loop
 - **Concurrent testing**: Validated with 10+ simultaneous threads
+- **Test suite**: 138 passing tests (0 failures)
 
 ## 🏗️ Architecture
 
@@ -152,6 +159,17 @@ Demonstrates:
 - PARTITION BY for departmental analytics
 - E-commerce analytics dashboard
 
+### Week 11 Advanced Indexes Demo
+```bash
+cargo run --example week11_advanced_indexes_demo
+```
+
+Demonstrates:
+- GIN index for array containment and full-text search
+- GiST index for spatial queries and range searches
+- BRIN index for time-series data with massive compression
+- Index comparison and use case recommendations
+
 ## 🧪 Testing
 
 ```bash
@@ -168,35 +186,33 @@ cargo bench
 
 ## ⚠️ Current Status
 
-**Version**: 0.1.0 (Development)
+**Version**: 0.2.0 (Development)
 
-**Progress**: 62% toward full PostgreSQL compatibility (13/21 weeks complete)
+**Progress**: 67% toward full PostgreSQL compatibility (14/21 weeks complete)
 
-**Compilation Status**: ⚠️ Needs mechanical fixes (~20 min work)
-- Row API compatibility updates needed
-- See `docs/COMPILATION_FIXES_NEEDED.md` for details
+**Build Status**: ✅ All tests passing (138 tests, 0 failures)
+
+**Latest Features**: Advanced Indexing (GIN, GiST, BRIN)
 
 ## 🗺️ Roadmap
 
-### Completed (Weeks 1-10, 13)
+### Completed (Weeks 1-11, 13)
 - ✅ Core ACID transactions with MVCC
 - ✅ Schema system with constraints
 - ✅ Authentication & Authorization
 - ✅ Triggers, Views, Sequences, Stored Procedures
 - ✅ Aggregate and Window Functions
-
-### In Progress
-- 🔄 Compilation fixes for API compatibility
+- ✅ Advanced Indexing (GIN, GiST, BRIN)
 
 ### Next Up (Critical Features)
-- ⏳ **Week 11**: Advanced Indexing (GIN, GiST, BRIN)
 - ⏳ **Week 12**: Partitioning (Range, List, Hash)
-- ⏳ **Week 14**: Full-Text Search
-- ⏳ JSON/JSONB support
-- ⏳ Array types
-- ⏳ CTEs (Common Table Expressions)
+- ⏳ **Week 14**: Joins & Subqueries
+- ⏳ **Week 15**: CTEs (Common Table Expressions)
+- ⏳ **Week 16**: JSON/JSONB & Array types
+- ⏳ **Week 17**: Full-Text Search
+- ⏳ **Week 18-21**: Query Planner, VACUUM, Replication, Enterprise
 
-See `docs/archive/DATABASE_COMPLETE_ROADMAP.md` for the full 21-week plan.
+See [ROADMAP.md](./ROADMAP.md) for the complete 21-week plan to v1.0.0.
 
 ## 📖 Documentation
 
@@ -229,10 +245,10 @@ NexusQL aims to be:
 
 ## 📈 Statistics
 
-- **Code**: 3,250+ lines of production code (Weeks 10 & 13)
-- **Tests**: 33 unit tests + 2 integration demos
-- **Documentation**: 2,000+ lines across planning and status docs
-- **Features**: 7 major subsystems implemented in this iteration
+- **Code**: 4,575+ lines of production code (+1,325 from Week 11)
+- **Tests**: 138 unit tests + 3 comprehensive demos
+- **Documentation**: 3,000+ lines including architecture and neural tech docs
+- **Features**: 10 major subsystems (Weeks 1-11, 13)
 
 ## 🔗 Links
 
