@@ -6,12 +6,12 @@ Guide for publishing NexusQL to your NPM organization.
 
 ## 📋 **Do You Need an Organization?**
 
-### **Personal Account (FREE)** ✅ Recommended for You
+### **Personal Account (Pro Plan - $7/month)**
 - ✅ Unlimited private packages
-- ✅ Package name: `@johnhnguyen97/nexusql`
+- ✅ Package name: `@nhoy/nexusql`
 - ✅ Just you can publish/maintain
-- ✅ Can grant access to collaborators (free)
-- ✅ **COMPLETELY FREE**
+- ✅ Can grant access to collaborators
+- ❌ **Costs $7/month**
 
 ### **Organization ($7/user/month)**
 - ✅ Team management features

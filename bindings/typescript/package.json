@@ -1,5 +1,5 @@
 {
-  "name": "@johnhnguyen97/nexusql",
+  "name": "@nhoy/nexusql",
   "version": "2.4.0",
   "description": "AI-Native, PostgreSQL-compatible database with multi-language support",
   "main": "dist/index.js",
