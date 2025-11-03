@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "maturin>=1.0"]
+build-backend = "maturin"
+
+[project]
+name = "nexusql"
+version = "2.3.0"
+description = "AI-Native, PostgreSQL-compatible database with Python support"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["database", "postgresql", "sql", "embedded", "ai-native", "rust"]
+authors = [
+  {name = "John Nguyen", email = "john@nexusql.io"}
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "black>=22.0.0", "mypy>=0.950"]
+
+[project.urls]
+Homepage = "https://github.com/johnhnguyen97/NexusQL"
+Documentation = "https://github.com/johnhnguyen97/NexusQL#readme"
+Repository = "https://github.com/johnhnguyen97/NexusQL"
+"Bug Tracker" = "https://github.com/johnhnguyen97/NexusQL/issues"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

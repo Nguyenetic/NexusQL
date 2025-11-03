@@ -1,0 +1,51 @@
+{
+  "name": "nexusql",
+  "version": "2.3.0",
+  "description": "AI-Native, PostgreSQL-compatible database with multi-language support",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "prepublish": "npm run build"
+  },
+  "keywords": [
+    "database",
+    "postgresql",
+    "sql",
+    "embedded",
+    "ai-native",
+    "vector-search",
+    "full-text-search",
+    "distributed",
+    "file-based",
+    "rust"
+  ],
+  "author": "John Nguyen <john@nexusql.io>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnhnguyen97/NexusQL.git"
+  },
+  "bugs": {
+    "url": "https://github.com/johnhnguyen97/NexusQL/issues"
+  },
+  "homepage": "https://github.com/johnhnguyen97/NexusQL#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "@napi-rs/cli": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "jest": "^29.0.0",
+    "@types/jest": "^29.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
