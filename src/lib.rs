@@ -62,6 +62,9 @@ pub mod extensions;
 // v1.2.0: Advanced Analytics
 pub mod analytics;
 
+// v1.3.0: Distributed Database
+pub mod distributed;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
