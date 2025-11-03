@@ -32,32 +32,63 @@ npm install git+https://github.com/johnhnguyen97/NexusQL.git#master
 
 ---
 
-## 🏢 Option 2: NPM Private Packages (Official)
+## 🏢 Option 2: NPM Private Packages (Official - RECOMMENDED FOR TEAMS)
 
-### Use NPM Organizations (Paid)
+### Official NPM Private Packages
+**Source**: https://docs.npmjs.com/about-private-packages
+
+**Pricing:**
+- **Free**: Unlimited private packages for individual accounts!
+- **Teams**: $7/user/month for organizations
+
+### Setup for Individual (FREE!)
 
 ```bash
-# Create private NPM organization
-# Cost: $7/month for unlimited private packages
+# 1. Login to NPM
+npm login
 
-# Publish to private scope
+# 2. Update package.json with scoped name
+{
+  "name": "@johnhnguyen97/nexusql",
+  "private": true,
+  "version": "2.4.0"
+}
+
+# 3. Publish as PRIVATE
+cd NexusQL/bindings/typescript
 npm publish --access restricted
 ```
 
-### Install
+### Install (You and Authorized Users)
+
 ```bash
-npm install @yourorg/nexusql
+# Just like public NPM!
+npm install @johnhnguyen97/nexusql
+```
+
+### Share with Team
+
+```bash
+# Grant access to team members
+npm owner add <username> @johnhnguyen97/nexusql
+
+# Or create an organization ($7/user/month)
+npm org create yourcompany
+npm access grant read-write yourcompany:developers @johnhnguyen97/nexusql
 ```
 
 **Pros:**
-- ✅ Official NPM solution
+- ✅ FREE for individual private packages!
+- ✅ Official NPM infrastructure
 - ✅ Works exactly like public NPM
-- ✅ Team management built-in
-- ✅ `npm install @yourorg/nexusql`
+- ✅ Reliable and fast (NPM CDN)
+- ✅ Team collaboration features
+- ✅ `npm install @yourscope/nexusql`
 
 **Cons:**
-- ❌ Costs $7/month
-- ❌ Requires NPM organization
+- ❌ Requires NPM account (free)
+- ❌ Must use scoped package name (@yourname/package)
+- ❌ Costs $7/user/month for organizations (but FREE for individuals!)
 
 ---
 
