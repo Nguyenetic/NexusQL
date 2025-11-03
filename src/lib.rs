@@ -59,6 +59,9 @@ pub mod replication;
 // v1.1.0: Extensions & Plugins
 pub mod extensions;
 
+// v1.2.0: Advanced Analytics
+pub mod analytics;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
