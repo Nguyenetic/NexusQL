@@ -83,6 +83,12 @@ pub mod migrations;
 // Backup & Restore
 pub mod backup;
 
+// Security & Audit
+pub mod security;
+
+// Developer Tools
+pub mod devtools;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
@@ -93,6 +99,29 @@ pub use storage::LSMStorage;
 pub use types::{ResultSet, Row, Value};
 
 /// Main NexusSQL database instance
+///
+/// NexusQL is a production-ready, PostgreSQL-compatible, AI-native database
+/// with advanced features including:
+/// - Full ACID transactions with MVCC
+/// - 5 index types (B-Tree, HNSW, GIN, GiST, BRIN)
+/// - Table partitioning and sharding
+/// - Full-text search and semantic search
+/// - Replication and high availability
+///
+/// # Examples
+///
+/// ```no_run
+/// use nexusql::NexusSQL;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let db = NexusSQL::new("./mydb").await?;
+///     db.execute("CREATE TABLE users (id INT, name TEXT)").await?;
+///     let result = db.execute("SELECT * FROM users").await?;
+///     db.shutdown().await?;
+///     Ok(())
+/// }
+/// ```
 pub struct NexusSQL {
     kernel: NexusKernel,
 }

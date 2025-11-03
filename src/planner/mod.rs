@@ -11,7 +11,6 @@
 use crate::types::{Row, Value};
 use crate::Result;
 use std::collections::HashMap;
-use std::time::Instant;
 
 /// Table statistics
 #[derive(Debug, Clone)]

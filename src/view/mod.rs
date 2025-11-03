@@ -2,7 +2,7 @@
 // Week 10: Database Convenience Features
 // PostgreSQL-compatible views with query rewriting and updateable views
 
-use crate::types::{Row, Value};
+use crate::types::Row;
 use crate::{NexusError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

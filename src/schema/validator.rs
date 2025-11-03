@@ -11,7 +11,7 @@
 //! Context7 Research: PostgreSQL constraint system
 //! PROPRIETARY & PATENTABLE
 
-use super::{Constraint, DataType, ReferentialAction, TableSchema};
+use super::{Constraint, ReferentialAction, TableSchema};
 use crate::types::{Row, Value};
 use crate::Result;
 

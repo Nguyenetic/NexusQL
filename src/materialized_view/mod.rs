@@ -9,7 +9,7 @@
 //!
 //! PROPRIETARY & PATENTABLE
 
-use crate::types::{ResultSet, Row, Value};
+use crate::types::{ResultSet, Row};
 use crate::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

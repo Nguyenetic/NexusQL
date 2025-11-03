@@ -127,10 +127,10 @@ cd nexus
 cargo build --release
 ```
 
-### Quick Example
+### Quick Example - Rust
 
 ```rust
-use nexus::NexusSQL;
+use nexusql::NexusSQL;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -146,17 +146,49 @@ async fn main() -> Result<()> {
         )
     ").await?;
 
-    // Use triggers for auto-timestamps
-    db.execute("
-        CREATE TRIGGER update_timestamp
-        BEFORE UPDATE ON users
-        FOR EACH ROW
-        EXECUTE FUNCTION update_timestamp()
-    ").await?;
-
     db.shutdown().await?;
     Ok(())
 }
+```
+
+### Quick Example - TypeScript
+
+```typescript
+import { NexusDB } from 'nexusql';
+
+const db = new NexusDB('./my_database');
+
+// Execute queries
+await db.execute('CREATE TABLE users (id INT, name TEXT)');
+const result = await db.query('SELECT * FROM users WHERE id = 1');
+
+// Use transactions
+const tx = await db.beginTransaction();
+await tx.query('INSERT INTO users VALUES (1, "Alice")');
+await tx.commit();
+
+await db.close();
+```
+
+### Quick Example - Python
+
+```python
+from nexusql import NexusDB
+
+# Connect to database
+db = NexusDB('./my_database')
+
+# Execute queries
+db.execute('CREATE TABLE users (id INT, name TEXT)')
+result = db.query('SELECT * FROM users WHERE id = 1')
+
+# Use transactions with context manager
+with db.transaction():
+    db.execute('INSERT INTO users VALUES (1, "Alice")')
+    db.execute('UPDATE accounts SET balance = balance - 100')
+    # Auto-commits on success, rolls back on exception
+
+db.close()
 ```
 
 ## 📚 Examples

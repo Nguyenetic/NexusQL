@@ -1,7 +1,6 @@
 // Backup & Restore - File-Based Database Backup
 // Safe backup and restore of database files
 
-use crate::types::{Row, Value};
 use crate::{NexusError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};

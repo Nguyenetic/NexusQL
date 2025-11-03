@@ -1,7 +1,7 @@
 // CLI Tool - Interactive SQL Shell
 // psql-like command-line interface for NexusQL
 
-use crate::{NexusError, Result};
+use crate::Result;
 use std::io::{self, Write};
 
 /// CLI prompt and command processor
