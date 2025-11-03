@@ -321,7 +321,18 @@ This is currently a development project. Contributions welcome once compilation 
 
 ## 📄 License
 
-Proprietary - See LICENSE file for details
+MIT License - See LICENSE file for details
+
+**Note**: This is a PRIVATE project for personal/internal use. Not published to NPM or PyPI.
+
+## 🔒 Private Usage
+
+See [PRIVATE_USAGE.md](./PRIVATE_USAGE.md) for instructions on:
+- Using NexusQL in your Rust projects (path dependency)
+- Using NexusQL in Node.js/TypeScript (npm link)
+- Using NexusQL in Python (pip install -e)
+- Setting up for team use (private Git repo)
+- Internal package registry (Verdaccio, devpi)
 
 ## 🎯 Goals
 
