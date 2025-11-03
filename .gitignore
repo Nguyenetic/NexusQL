@@ -1,32 +1,51 @@
-# Build artifacts
-/target/
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+*.tsbuildinfo
+
+# Build outputs
+dist/
+build/
+*.js.map
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Rust
+target/
 Cargo.lock
-
-# Test databases
-*.nexus/
-demo_db/
-data/
-
-# Logs
-*.log
-*.txt
-
-# Dependencies
-deps/
-include/
-
-# OS
-.DS_Store
-Thumbs.db
+**/*.rs.bk
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Private files
-private/
+# OS
+.DS_Store
+Thumbs.db
 
-# Temporary
-nul
+# Database files (examples)
+*.db
+*.sqlite
+*.sqlite3
+mydb/
+testdb/
+
+# Logs
+*.log
+logs/
