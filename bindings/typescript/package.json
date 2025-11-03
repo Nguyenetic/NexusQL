@@ -1,6 +1,6 @@
 {
-  "name": "nexusql",
-  "version": "2.3.0",
+  "name": "@johnhnguyen97/nexusql",
+  "version": "2.4.0",
   "description": "AI-Native, PostgreSQL-compatible database with multi-language support",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
