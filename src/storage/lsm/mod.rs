@@ -7,9 +7,7 @@ pub mod optimized_wal;
 pub mod sst;
 pub mod wal;
 
-use crate::types::{Row, Value};
 use crate::Result;
-use std::collections::BTreeMap;
 
 /// LSM Tree Storage
 ///

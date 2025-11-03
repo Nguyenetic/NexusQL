@@ -136,7 +136,7 @@ impl ParallelExecutor {
                 }
             }
             PlanNode::Aggregate {
-                input, group_by, ..
+                input,  ..
             } => {
                 // Parallel aggregation requires gather
                 let parallel_input = self.create_parallel_plan(*input);

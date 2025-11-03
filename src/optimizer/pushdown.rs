@@ -2,7 +2,6 @@
 //! PROPRIETARY
 
 use crate::query::ast::*;
-use crate::types::Value;
 
 pub struct PushdownAnalyzer;
 

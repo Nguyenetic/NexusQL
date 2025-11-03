@@ -5,10 +5,10 @@
 pub mod mvcc;
 pub mod wal;
 
-use crate::types::{Row, Value};
+use crate::types::Row;
 use crate::{NexusError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -413,7 +413,7 @@ impl TransactionManager {
 
     /// Recover from WAL after crash
     pub fn recover(&self) -> Result<()> {
-        let mut wal = self.wal.lock().unwrap();
+        let wal = self.wal.lock().unwrap();
         let records = wal.read_all()?;
 
         let mut in_progress: HashMap<TransactionId, Vec<TransactionOperation>> = HashMap::new();

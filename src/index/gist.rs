@@ -12,7 +12,6 @@
 //! - Lossy compression via bounding boxes
 
 use crate::types::Value;
-use std::cmp::Ordering;
 
 /// GiST Index - Generalized Search Tree
 #[derive(Debug, Clone)]

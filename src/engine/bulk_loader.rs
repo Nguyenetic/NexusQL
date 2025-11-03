@@ -4,7 +4,6 @@
 use crate::types::{Row, Value};
 use crate::storage::Table;
 use crate::Result;
-use std::collections::HashMap;
 
 pub struct BulkLoader {
     /// Disable WAL during bulk load (RocksDB practice)

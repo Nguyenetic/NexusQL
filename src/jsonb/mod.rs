@@ -10,7 +10,6 @@
 use crate::types::Value;
 use crate::{NexusError, Result};
 use serde_json;
-use std::collections::HashMap;
 
 /// JSONB value (binary, indexed format)
 #[derive(Debug, Clone, PartialEq)]

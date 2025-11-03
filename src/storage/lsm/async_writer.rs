@@ -11,7 +11,7 @@ use crate::Result;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify};
 
 /// Configuration for async write optimization
 #[derive(Clone, Debug)]

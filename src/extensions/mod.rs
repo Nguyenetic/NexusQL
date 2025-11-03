@@ -7,7 +7,7 @@
 // - Custom operators: Define new operators for types
 // - Extension framework: Plugin architecture
 
-use crate::types::{Row, Value};
+use crate::types::Row;
 use crate::{NexusError, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

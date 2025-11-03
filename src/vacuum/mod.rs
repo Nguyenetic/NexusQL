@@ -9,7 +9,7 @@
 // - Auto-vacuum: Automatic maintenance
 
 use crate::types::Row;
-use crate::{NexusError, Result};
+use crate::Result;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 

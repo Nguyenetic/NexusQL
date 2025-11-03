@@ -10,7 +10,7 @@
 //!
 //! PROPRIETARY & PATENTABLE
 
-use crate::types::{ResultSet, Row, Value};
+use crate::types::ResultSet;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};

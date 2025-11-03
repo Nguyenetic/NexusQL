@@ -10,9 +10,8 @@
 //! PROPRIETARY & PATENTABLE
 
 use crate::engine::advanced_optimizer::{PlanCost, PlanNode};
-use crate::types::{ResultSet, Value};
+use crate::types::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Distribution strategy (Citus patterns)
 #[derive(Debug, Clone, PartialEq)]
@@ -213,7 +212,7 @@ impl DistributedPlanner {
     ) -> Option<DistributedPlan> {
         // Check if this is a simple scan with equality filter on distribution column
         match plan {
-            PlanNode::Scan { table, filter, .. } => {
+            PlanNode::Scan { table,  .. } => {
                 let dist_table = self.tables.get(table)?;
 
                 // Get distribution column

@@ -4,7 +4,6 @@
 
 pub mod rls;
 
-use crate::types::Value;
 use crate::{NexusError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

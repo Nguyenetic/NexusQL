@@ -322,7 +322,7 @@ impl JoinOrderOptimizer {
         // Simplified: just use left-deep join tree with random order
         // Real GEQO uses genetic algorithm with crossover, mutation, etc.
 
-        let mut relations = graph.relations.clone();
+        let relations = graph.relations.clone();
         let mut plan = self.create_scan_plan(&relations[0].name);
 
         for i in 1..relations.len() {

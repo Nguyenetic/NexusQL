@@ -3,7 +3,7 @@
 
 use crate::query::ast::*;
 use crate::query::evaluator::evaluate_where;
-use crate::types::{Row, Value, ResultSet};
+use crate::types::{Row, ResultSet};
 use crate::storage::Table;
 use crate::Result;
 use std::collections::HashMap;

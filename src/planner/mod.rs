@@ -9,9 +9,8 @@
 // - EXPLAIN ANALYZE: Show plan + actual execution stats
 
 use crate::types::{Row, Value};
-use crate::{NexusError, Result};
+use crate::Result;
 use std::collections::HashMap;
-use std::time::Instant;
 
 /// Table statistics
 #[derive(Debug, Clone)]
@@ -107,7 +106,7 @@ impl TableStatistics {
             .collect();
 
         // Build histogram (10 buckets)
-        let mut sorted_vals = distinct_values.clone();
+        let sorted_vals = distinct_values.clone();
         let histogram_bounds = if sorted_vals.len() > 10 {
             let bucket_size = sorted_vals.len() / 10;
             (0..10)

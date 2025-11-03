@@ -7,8 +7,6 @@
 // - AutoML query optimization: Machine learning for query planning
 // - Semantic caching: Vector-based cache for similar queries
 
-use crate::types::{Row, Value};
-use crate::{NexusError, Result};
 use std::collections::HashMap;
 
 /// Vector embedding (dense)

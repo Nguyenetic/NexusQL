@@ -2,7 +2,7 @@
 // PostgreSQL PL/pgSQL-compatible procedural language
 
 use super::{FunctionResult, StoredFunction};
-use crate::types::{Row, Value};
+use crate::types::Value;
 use crate::{NexusError, Result};
 use std::collections::HashMap;
 

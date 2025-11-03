@@ -1,7 +1,6 @@
 //! Core data types for NexusSQL
 //! PROPRIETARY
 
-use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 /// A single value in the database

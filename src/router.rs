@@ -1,7 +1,7 @@
 //! Intelligent Query Router
 //! PROPRIETARY & PATENTABLE INNOVATION #3
 
-use crate::engine::{Query, QueryCost, StorageEngine, QueryType};
+use crate::engine::{Query, StorageEngine, QueryType};
 use std::collections::HashMap;
 
 /// Smart query router with cost-based optimization

@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// WAL Log Record
 #[derive(Serialize, Deserialize, Debug, Clone)]

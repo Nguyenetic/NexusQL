@@ -11,10 +11,9 @@
 //! Context7 Research: PostgreSQL constraint system
 //! PROPRIETARY & PATENTABLE
 
-use super::{ColumnConstraint, Constraint, DataType, ReferentialAction, TableSchema};
+use super::{Constraint, ReferentialAction, TableSchema};
 use crate::types::{Row, Value};
 use crate::Result;
-use std::collections::{HashMap, HashSet};
 
 /// Validates data against schema constraints
 pub struct Validator {

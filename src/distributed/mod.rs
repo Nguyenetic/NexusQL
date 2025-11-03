@@ -247,7 +247,7 @@ impl DistributedQueryCoordinator {
 
     /// Execute distributed query across shards
     pub fn execute_distributed(&self, query: &str, shard_keys: Vec<Value>) -> Result<Vec<Row>> {
-        let mut all_results = Vec::new();
+        let all_results = Vec::new();
 
         // Route to appropriate shards
         let target_shards: Vec<usize> = shard_keys

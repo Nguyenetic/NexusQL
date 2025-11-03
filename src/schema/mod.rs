@@ -13,7 +13,7 @@ pub mod validator;
 
 pub use validator::{ForeignKeyValidator, Validator};
 
-use crate::types::{Row, Value};
+use crate::types::Value;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -1,7 +1,6 @@
 //! Hyperdimensional Computing Operations
 //! PROPRIETARY - Energy-Efficient Intelligence
 
-use std::ops::{Add, BitXor};
 
 /// Hypervector - High-dimensional binary vector
 #[derive(Debug, Clone)]

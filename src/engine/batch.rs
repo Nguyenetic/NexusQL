@@ -1,8 +1,7 @@
 //! Batch Operations - PostgreSQL/DuckDB Best Practice
 //! PROPRIETARY - Performance Optimization
 
-use crate::types::{Row, Value};
-use crate::Result;
+use crate::types::Value;
 
 /// Batch insert builder
 pub struct BatchInsert {

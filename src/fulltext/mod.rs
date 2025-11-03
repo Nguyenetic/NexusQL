@@ -8,9 +8,7 @@
 // - Stemming: Basic word normalization
 // - Stop words: Common word filtering
 
-use crate::types::Value;
-use crate::{NexusError, Result};
-use std::collections::{HashMap, HashSet};
+use crate::Result;
 
 /// Lexeme with position and weight
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
