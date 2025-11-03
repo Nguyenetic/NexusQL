@@ -77,6 +77,12 @@ pub mod cli;
 // Performance Profiler
 pub mod profiler;
 
+// Migrations
+pub mod migrations;
+
+// Backup & Restore
+pub mod backup;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
