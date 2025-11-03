@@ -121,9 +121,30 @@ nexus/
 
 ### Installation
 
+#### Install from GitHub (Recommended)
+
+**Node.js/TypeScript:**
 ```bash
-git clone https://github.com/yourusername/nexus.git
-cd nexus
+npm install git+https://github.com/johnhnguyen97/NexusQL.git#master
+```
+
+**Python:**
+```bash
+pip install git+https://github.com/johnhnguyen97/NexusQL.git@master#subdirectory=bindings/python
+```
+
+**Rust:**
+```toml
+# Add to Cargo.toml
+[dependencies]
+nexusql = { git = "https://github.com/johnhnguyen97/NexusQL.git" }
+```
+
+#### Build from Source
+
+```bash
+git clone https://github.com/johnhnguyen97/NexusQL.git
+cd NexusQL
 cargo build --release
 ```
 
