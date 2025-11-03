@@ -65,6 +65,9 @@ pub mod analytics;
 // v1.3.0: Distributed Database
 pub mod distributed;
 
+// v2.0.0: AI-Native Database
+pub mod ai_native;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
