@@ -56,6 +56,9 @@ pub mod vacuum;
 // Week 20-21: Replication & Enterprise Features
 pub mod replication;
 
+// v1.1.0: Extensions & Plugins
+pub mod extensions;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
