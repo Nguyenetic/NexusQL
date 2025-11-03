@@ -7,7 +7,7 @@
 // - Prepared statements with plan caching
 // - Monitoring and metrics (pg_stat_* views)
 
-use crate::types::Row;
+use crate::types::{Row, Value};
 use crate::{NexusError, Result};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};

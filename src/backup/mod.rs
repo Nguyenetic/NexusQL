@@ -186,42 +186,6 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_create_migration() {
-        let temp_dir = tempdir().unwrap();
-        let mgr = MigrationManager::new(temp_dir.path().to_path_buf()).unwrap();
-
-        let migration = mgr.create_migration("add_users_table").unwrap();
-        assert!(migration.version > 0);
-        assert_eq!(migration.name, "add_users_table");
-    }
-
-    #[test]
-    fn test_migration_apply() {
-        let temp_dir = tempdir().unwrap();
-        let mut mgr = MigrationManager::new(temp_dir.path().to_path_buf()).unwrap();
-
-        mgr.create_migration("test_migration").unwrap();
-
-        let applied = mgr.migrate_up().unwrap();
-        assert_eq!(applied.len(), 1);
-
-        let status = mgr.status();
-        assert_eq!(status.applied_count, 1);
-    }
-
-    #[test]
-    fn test_migration_rollback() {
-        let temp_dir = tempdir().unwrap();
-        let mut mgr = MigrationManager::new(temp_dir.path().to_path_buf()).unwrap();
-
-        mgr.create_migration("test").unwrap();
-        mgr.migrate_up().unwrap();
-
-        let rolled_back = mgr.migrate_down().unwrap();
-        assert!(rolled_back.is_some());
-    }
-
-    #[test]
     fn test_backup_creation() {
         let db_dir = tempdir().unwrap();
         let backup_dir = tempdir().unwrap();

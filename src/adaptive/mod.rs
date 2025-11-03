@@ -9,7 +9,7 @@
 //!
 //! PROPRIETARY & PATENTABLE
 
-use crate::engine::{JoinAlgorithm, PlanNode};
+use crate::engine::{JoinAlgorithm, PlanCost, PlanNode};
 use std::collections::HashMap;
 
 /// Runtime statistics collected during execution

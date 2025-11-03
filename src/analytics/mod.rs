@@ -9,6 +9,7 @@
 use crate::types::{Row, Value};
 use crate::{NexusError, Result};
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// Time-series aggregation window
 #[derive(Debug, Clone)]

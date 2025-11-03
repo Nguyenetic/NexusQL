@@ -7,7 +7,7 @@
 // - Cycle detection: Prevent infinite loops in recursive queries
 // - Materialization: Control when CTEs are cached vs. inlined
 
-use crate::types::Row;
+use crate::types::{Row, Value};
 use crate::{NexusError, Result};
 use std::collections::{HashMap, HashSet};
 
