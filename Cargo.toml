@@ -37,6 +37,10 @@ tempfile = "3"
 name = "quick_bench"
 harness = false
 
+[[bench]]
+name = "performance_benchmarks"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1
