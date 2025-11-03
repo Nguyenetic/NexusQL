@@ -68,6 +68,15 @@ pub mod distributed;
 // v2.0.0: AI-Native Database
 pub mod ai_native;
 
+// Advanced SQL Features
+pub mod advanced;
+
+// CLI Tool
+pub mod cli;
+
+// Performance Profiler
+pub mod profiler;
+
 pub use engine::StorageEngine;
 pub use error::{NexusError, Result};
 pub use index::HNSWIndex;
