@@ -129,11 +129,32 @@ pub struct NexusSQL {
 
 impl NexusSQL {
     pub async fn new(path: &str) -> Result<Self> {
-        let kernel = NexusKernel::new(path).await?;
+        // Check if in-memory database requested
+        let is_memory = path == ":memory:";
 
-        let data_path = format!("{}/default", path);
+        // For in-memory, use a unique temp path (won't actually create files)
+        let actual_path = if is_memory {
+            // Use a unique ID to avoid collisions between multiple :memory: instances
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static MEMORY_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = MEMORY_COUNTER.fetch_add(1, Ordering::SeqCst);
+            format!(":memory:_{}", id)
+        } else {
+            path.to_string()
+        };
+
+        let kernel = NexusKernel::new(&actual_path, is_memory).await?;
+
+        let data_path = if is_memory {
+            format!("{}:default", actual_path) // Special marker for in-memory
+        } else {
+            format!("{}/default", actual_path)
+        };
+
         kernel
-            .register_engine(Box::new(engine::default::DefaultEngine::new(&data_path)?))
+            .register_engine(Box::new(engine::default::DefaultEngine::new(
+                &data_path, is_memory,
+            )?))
             .await?;
         kernel
             .register_engine(Box::new(engine::colbert::ColBERTEngine::new()))
@@ -142,7 +163,10 @@ impl NexusSQL {
             .register_engine(Box::new(engine::hdc::HDCEngine::new()))
             .await?;
 
-        tracing::info!("✓ All engines registered");
+        tracing::info!(
+            "✓ All engines registered (mode: {})",
+            if is_memory { "memory" } else { "disk" }
+        );
 
         Ok(Self { kernel })
     }

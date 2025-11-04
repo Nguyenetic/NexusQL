@@ -13,21 +13,30 @@ use crate::Result;
 ///
 /// Architecture:
 /// 1. MemTable (in-memory, sorted)
-/// 2. WAL (Write-Ahead Log for durability)
+/// 2. WAL (Write-Ahead Log for durability) - optional for :memory: mode
 /// 3. SST Files (Sorted String Tables on disk)
 /// 4. Compaction (background merging)
 pub struct LSMStorage {
     memtable: memtable::MemTable,
-    wal: wal::WriteAheadLog,
-    sequence: u64, // Monotonically increasing
+    wal: Option<wal::WriteAheadLog>, // Optional for :memory: mode
+    sequence: u64,                   // Monotonically increasing
+    is_memory: bool,
 }
 
 impl LSMStorage {
-    pub fn new(path: &str) -> Result<Self> {
+    pub fn new(path: &str, is_memory: bool) -> Result<Self> {
+        // Skip WAL for in-memory databases
+        let wal = if is_memory {
+            None
+        } else {
+            Some(wal::WriteAheadLog::new(&format!("{}/wal", path))?)
+        };
+
         Ok(Self {
             memtable: memtable::MemTable::new(),
-            wal: wal::WriteAheadLog::new(&format!("{}/wal", path))?,
+            wal,
             sequence: 0,
+            is_memory,
         })
     }
 
@@ -35,14 +44,16 @@ impl LSMStorage {
     pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
         self.sequence += 1;
 
-        // 1. Write to WAL first (durability)
-        self.wal.append(self.sequence, &key, &value)?;
+        // 1. Write to WAL first (durability) - skip for in-memory
+        if let Some(ref mut wal) = self.wal {
+            wal.append(self.sequence, &key, &value)?;
+        }
 
         // 2. Write to memtable (fast reads)
         self.memtable.put(key, value, self.sequence);
 
-        // 3. Check if memtable is full → flush to SST
-        if self.memtable.size() > 4 * 1024 * 1024 {
+        // 3. Check if memtable is full → flush to SST (skip for in-memory)
+        if !self.is_memory && self.memtable.size() > 4 * 1024 * 1024 {
             // 4MB threshold
             tracing::info!("MemTable full, flushing to SST...");
             // TODO: Flush to SST file
@@ -68,8 +79,10 @@ impl LSMStorage {
     pub fn delete(&mut self, key: Vec<u8>) -> Result<()> {
         self.sequence += 1;
 
-        // Write tombstone marker
-        self.wal.append_delete(self.sequence, &key)?;
+        // Write tombstone marker - skip WAL for in-memory
+        if let Some(ref mut wal) = self.wal {
+            wal.append_delete(self.sequence, &key)?;
+        }
         self.memtable.delete(key, self.sequence);
 
         Ok(())
