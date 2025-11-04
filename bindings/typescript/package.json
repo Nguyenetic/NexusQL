@@ -1,7 +1,7 @@
 {
   "name": "@nguyenetic/nexusql",
-  "version": "2.4.0",
-  "description": "AI-Native, PostgreSQL-compatible database with vector search support. Embedded, fast, and easy to use.",
+  "version": "2.5.0",
+  "description": "AI-Native, PostgreSQL-compatible database with vector search support. Embedded, fast, and easy to use. Now with 37-87× faster batch operations!",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
@@ -33,10 +33,18 @@
     "embedded",
     "ai-native",
     "vector-search",
+    "vector-database",
+    "pgvector",
+    "hnsw",
+    "semantic-search",
+    "embeddings",
     "full-text-search",
     "distributed",
     "file-based",
-    "rust"
+    "rust",
+    "mcp",
+    "batch-operations",
+    "high-performance"
   ],
   "author": "John Nguyen <john@nexusql.io>",
   "license": "MIT",
