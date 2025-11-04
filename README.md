@@ -125,25 +125,25 @@ nexus/
 
 **Node.js/TypeScript:**
 ```bash
-npm install git+https://github.com/johnhnguyen97/NexusQL.git#master
+npm install git+https://github.com/Nguyenetic/NexusQL.git#master
 ```
 
 **Python:**
 ```bash
-pip install git+https://github.com/johnhnguyen97/NexusQL.git@master#subdirectory=bindings/python
+pip install git+https://github.com/Nguyenetic/NexusQL.git@master#subdirectory=bindings/python
 ```
 
 **Rust:**
 ```toml
 # Add to Cargo.toml
 [dependencies]
-nexusql = { git = "https://github.com/johnhnguyen97/NexusQL.git" }
+nexusql = { git = "https://github.com/Nguyenetic/NexusQL.git" }
 ```
 
 #### Build from Source
 
 ```bash
-git clone https://github.com/johnhnguyen97/NexusQL.git
+git clone https://github.com/Nguyenetic/NexusQL.git
 cd NexusQL
 cargo build --release
 ```

@@ -42,15 +42,15 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/johnhnguyen97/NexusQL.git"
+    "url": "https://github.com/Nguyenetic/NexusQL.git"
   },
   "publishConfig": {
     "access": "public"
   },
   "bugs": {
-    "url": "https://github.com/johnhnguyen97/NexusQL/issues"
+    "url": "https://github.com/Nguyenetic/NexusQL/issues"
   },
-  "homepage": "https://github.com/johnhnguyen97/NexusQL#readme",
+  "homepage": "https://github.com/Nguyenetic/NexusQL#readme",
   "engines": {
     "node": ">=16.0.0"
   },

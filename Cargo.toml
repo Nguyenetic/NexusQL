@@ -3,6 +3,10 @@ name = "nexusql"
 version = "0.1.0"
 edition = "2021"
 license = "Proprietary"
+authors = ["John Nguyen <john@nexusql.io>"]
+repository = "https://github.com/Nguyenetic/NexusQL"
+homepage = "https://github.com/Nguyenetic/NexusQL"
+documentation = "https://github.com/Nguyenetic/NexusQL#readme"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
