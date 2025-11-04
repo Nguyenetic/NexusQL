@@ -138,8 +138,24 @@ impl PartialOrd for Value {
             (Value::Text(a), Value::Text(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Null, Value::Null) => Some(std::cmp::Ordering::Equal),
+            (Value::Vector(a), Value::Vector(b)) => {
+                // Compare vectors lexicographically
+                for (x, y) in a.iter().zip(b.iter()) {
+                    match x.partial_cmp(y) {
+                        Some(std::cmp::Ordering::Equal) => continue,
+                        other => return other,
+                    }
+                }
+                a.len().partial_cmp(&b.len())
+            }
             _ => None, // Different types cannot be compared
         }
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 

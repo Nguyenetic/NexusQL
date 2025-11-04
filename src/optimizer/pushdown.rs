@@ -42,11 +42,27 @@ impl PushdownAnalyzer {
                 where_clause,
                 ..
             } => {
-                let mut needed = columns.clone();
+                let mut needed = Vec::new();
+
+                // Extract columns from SELECT items
+                for item in columns {
+                    match item {
+                        SelectItem::Wildcard => {
+                            // Can't optimize wildcard - need all columns
+                            needed.push("*".to_string());
+                        }
+                        SelectItem::Expr { expr, .. } => {
+                            needed.extend(Self::extract_columns_from_expr(expr));
+                        }
+                    }
+                }
+
+                // Extract columns from WHERE clause
                 if let Some(expr) = where_clause {
                     let where_cols = Self::extract_columns_from_expr(expr);
                     needed.extend(where_cols);
                 }
+
                 needed.sort();
                 needed.dedup();
                 needed
@@ -71,11 +87,21 @@ impl PushdownAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Value;
 
     #[test]
     fn test_extract_columns() {
         let statement = Statement::Select {
-            columns: vec!["name".to_string(), "age".to_string()],
+            columns: vec![
+                SelectItem::Expr {
+                    expr: Expr::Column("name".to_string()),
+                    alias: None,
+                },
+                SelectItem::Expr {
+                    expr: Expr::Column("age".to_string()),
+                    alias: None,
+                },
+            ],
             from: "users".to_string(),
             where_clause: Some(Expr::BinaryOp {
                 left: Box::new(Expr::Column("age".to_string())),
@@ -83,6 +109,7 @@ mod tests {
                 right: Box::new(Expr::Literal(Value::Integer(18))),
             }),
             using_engine: None,
+            order_by: None,
             limit: None,
         };
 

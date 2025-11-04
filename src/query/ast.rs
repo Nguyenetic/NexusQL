@@ -16,7 +16,7 @@ pub enum Statement {
         values: Vec<Vec<Value>>,
     },
     Select {
-        columns: Vec<String>, // Empty = SELECT *
+        columns: Vec<SelectItem>, // Items to select (columns, expressions, *)
         from: String,
         where_clause: Option<Expr>,
         using_engine: Option<String>,
@@ -59,8 +59,18 @@ pub enum DataType {
     Vector(usize),
 }
 
+/// SELECT list item (what appears in SELECT clause)
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SelectItem {
+    /// SELECT * (all columns)
+    Wildcard,
+
+    /// Expression with optional alias: expr AS alias
+    Expr { expr: Expr, alias: Option<String> },
+}
+
 /// SQL Expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
     /// Column reference
     Column(String),
@@ -79,7 +89,7 @@ pub enum Expr {
     Function { name: String, args: Vec<Expr> },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BinaryOperator {
     Eq,      // =
     NotEq,   // !=

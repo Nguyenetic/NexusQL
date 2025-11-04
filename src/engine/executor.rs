@@ -2,9 +2,9 @@
 //! PROPRIETARY
 
 use crate::query::ast::*;
-use crate::query::evaluator::evaluate_where;
+use crate::query::evaluator::{evaluate_expr, evaluate_where};
 use crate::storage::Table;
-use crate::types::{ResultSet, Row};
+use crate::types::{ResultSet, Row, Value};
 use crate::Result;
 use std::collections::HashMap;
 
@@ -46,7 +46,7 @@ impl Executor {
                 }
             }
             Statement::Select {
-                columns: _,
+                columns,
                 from,
                 where_clause,
                 using_engine: _,
@@ -88,7 +88,10 @@ impl Executor {
                     rows.truncate(*lim);
                 }
 
-                Ok(ResultSet::new(rows))
+                // Project columns based on SELECT list
+                let result_rows = self.project_columns(&rows, columns)?;
+
+                Ok(ResultSet::new(result_rows))
             }
             Statement::Update {
                 table,
@@ -142,5 +145,48 @@ impl Executor {
 
     pub fn get_tables_mut(&mut self) -> &mut HashMap<String, Table> {
         &mut self.tables
+    }
+
+    /// Project columns from rows based on SELECT list items
+    fn project_columns(&self, rows: &[Row], select_items: &[SelectItem]) -> Result<Vec<Row>> {
+        let mut result_rows = Vec::with_capacity(rows.len());
+
+        for row in rows {
+            let mut result_cols = Vec::new();
+            let mut result_vals = Vec::new();
+
+            for item in select_items {
+                match item {
+                    SelectItem::Wildcard => {
+                        // Add all columns from the original row
+                        result_cols.extend(row.columns.clone());
+                        result_vals.extend(row.values.clone());
+                    }
+                    SelectItem::Expr { expr, alias } => {
+                        // Evaluate the expression
+                        let value = evaluate_expr(row, expr);
+
+                        // Determine column name (use alias if provided, otherwise expression string)
+                        let col_name = if let Some(alias_name) = alias {
+                            alias_name.clone()
+                        } else {
+                            // Generate a name from the expression
+                            match expr {
+                                Expr::Column(name) => name.clone(),
+                                Expr::Function { name, .. } => name.clone(),
+                                _ => "expr".to_string(),
+                            }
+                        };
+
+                        result_cols.push(col_name);
+                        result_vals.push(value);
+                    }
+                }
+            }
+
+            result_rows.push(Row::new(result_cols, result_vals));
+        }
+
+        Ok(result_rows)
     }
 }

@@ -53,7 +53,7 @@ impl QueryParser {
             sql_ast::Statement::Commit { .. } => {
                 // Handle COMMIT - just return empty result
                 Ok(Statement::Select {
-                    columns: vec![],
+                    columns: vec![SelectItem::Wildcard],
                     from: String::new(),
                     where_clause: None,
                     using_engine: None,
@@ -65,7 +65,7 @@ impl QueryParser {
             sql_ast::Statement::Rollback { .. } => {
                 // Handle ROLLBACK - just return empty result
                 Ok(Statement::Select {
-                    columns: vec![],
+                    columns: vec![SelectItem::Wildcard],
                     from: String::new(),
                     where_clause: None,
                     using_engine: None,
@@ -168,13 +168,8 @@ impl QueryParser {
             let columns = select
                 .projection
                 .iter()
-                .map(|proj| match proj {
-                    sql_ast::SelectItem::Wildcard(_) => "*".to_string(),
-                    sql_ast::SelectItem::UnnamedExpr(expr) => format!("{}", expr),
-                    sql_ast::SelectItem::ExprWithAlias { expr: _, alias } => alias.to_string(),
-                    _ => "unknown".to_string(),
-                })
-                .collect();
+                .map(|proj| self.convert_select_item(proj))
+                .collect::<Result<Vec<_>>>()?;
 
             // Extract USING clause if present
             let using_engine = self.extract_using_clause(query);
@@ -213,6 +208,140 @@ impl QueryParser {
             Err(NexusError::ParseError(
                 "Only SELECT supported currently".into(),
             ))
+        }
+    }
+
+    fn convert_select_item(&self, item: &sql_ast::SelectItem) -> Result<SelectItem> {
+        match item {
+            sql_ast::SelectItem::Wildcard(_) => Ok(SelectItem::Wildcard),
+
+            sql_ast::SelectItem::UnnamedExpr(expr) => {
+                let converted_expr = self.convert_expr_to_ast(expr)?;
+                Ok(SelectItem::Expr {
+                    expr: converted_expr,
+                    alias: None,
+                })
+            }
+
+            sql_ast::SelectItem::ExprWithAlias { expr, alias } => {
+                let converted_expr = self.convert_expr_to_ast(expr)?;
+                Ok(SelectItem::Expr {
+                    expr: converted_expr,
+                    alias: Some(alias.value.clone()),
+                })
+            }
+
+            _ => Err(NexusError::ParseError(
+                "Unsupported SELECT item type".into(),
+            )),
+        }
+    }
+
+    fn convert_expr_to_ast(&self, expr: &sql_ast::Expr) -> Result<Expr> {
+        match expr {
+            // Column reference
+            sql_ast::Expr::Identifier(ident) => Ok(Expr::Column(ident.value.clone())),
+
+            sql_ast::Expr::CompoundIdentifier(idents) => {
+                let col_name = idents
+                    .iter()
+                    .map(|i| i.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                Ok(Expr::Column(col_name))
+            }
+
+            // Literal values
+            sql_ast::Expr::Value(val) => {
+                let value = match val {
+                    sql_ast::Value::Number(n, _) => {
+                        if let Ok(i) = n.parse::<i64>() {
+                            Value::Integer(i)
+                        } else if let Ok(f) = n.parse::<f64>() {
+                            Value::Float(f.into())
+                        } else {
+                            return Err(NexusError::ParseError(format!("Invalid number: {}", n)));
+                        }
+                    }
+                    sql_ast::Value::SingleQuotedString(s)
+                    | sql_ast::Value::DoubleQuotedString(s) => {
+                        // Check if this is a vector literal
+                        if s.starts_with('[') && s.ends_with(']') {
+                            self.parse_vector_literal(s)?
+                        } else {
+                            Value::Text(s.clone())
+                        }
+                    }
+                    sql_ast::Value::Boolean(b) => Value::Boolean(*b),
+                    sql_ast::Value::Null => Value::Null,
+                    _ => return Err(NexusError::ParseError("Unsupported value type".into())),
+                };
+                Ok(Expr::Literal(value))
+            }
+
+            // Function calls
+            sql_ast::Expr::Function(func) => {
+                let name = func.name.to_string();
+
+                // Handle FunctionArguments enum
+                let args = match &func.args {
+                    sql_ast::FunctionArguments::None => Vec::new(),
+                    sql_ast::FunctionArguments::List(arg_list) => arg_list
+                        .args
+                        .iter()
+                        .map(|arg| match arg {
+                            sql_ast::FunctionArg::Unnamed(sql_ast::FunctionArgExpr::Expr(e)) => {
+                                self.convert_expr_to_ast(e)
+                            }
+                            _ => Err(NexusError::ParseError(
+                                "Unsupported function argument".into(),
+                            )),
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    _ => {
+                        return Err(NexusError::ParseError(
+                            "Unsupported function arguments type".into(),
+                        ))
+                    }
+                };
+
+                Ok(Expr::Function { name, args })
+            }
+
+            // Binary operations (for expressions in SELECT)
+            sql_ast::Expr::BinaryOp { left, op, right } => {
+                let left_expr = Box::new(self.convert_expr_to_ast(left)?);
+                let right_expr = Box::new(self.convert_expr_to_ast(right)?);
+                let binary_op = self.convert_binary_op(op)?;
+
+                Ok(Expr::BinaryOp {
+                    left: left_expr,
+                    op: binary_op,
+                    right: right_expr,
+                })
+            }
+
+            _ => Err(NexusError::ParseError(format!(
+                "Unsupported expression in SELECT: {:?}",
+                expr
+            ))),
+        }
+    }
+
+    fn convert_binary_op(&self, op: &sql_ast::BinaryOperator) -> Result<BinaryOperator> {
+        match op {
+            sql_ast::BinaryOperator::Eq => Ok(BinaryOperator::Eq),
+            sql_ast::BinaryOperator::NotEq => Ok(BinaryOperator::NotEq),
+            sql_ast::BinaryOperator::Lt => Ok(BinaryOperator::Lt),
+            sql_ast::BinaryOperator::LtEq => Ok(BinaryOperator::LtEq),
+            sql_ast::BinaryOperator::Gt => Ok(BinaryOperator::Gt),
+            sql_ast::BinaryOperator::GtEq => Ok(BinaryOperator::GtEq),
+            sql_ast::BinaryOperator::And => Ok(BinaryOperator::And),
+            sql_ast::BinaryOperator::Or => Ok(BinaryOperator::Or),
+            _ => Err(NexusError::ParseError(format!(
+                "Unsupported binary operator: {:?}",
+                op
+            ))),
         }
     }
 
