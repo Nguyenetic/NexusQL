@@ -219,6 +219,9 @@ pub enum DataType {
 
     // UUID
     Uuid,
+
+    // Vector type for semantic search (pgvector compatible)
+    Vector(usize), // dimension count
 }
 
 impl DataType {
@@ -230,6 +233,7 @@ impl DataType {
             (DataType::Text | DataType::Varchar(_) | DataType::Char(_), Value::Text(_)) => true,
             (DataType::Boolean, Value::Boolean(_)) => true,
             (DataType::Blob | DataType::Bytea, Value::Blob(_)) => true,
+            (DataType::Vector(expected_dim), Value::Vector(vec)) => vec.len() == *expected_dim,
             (_, Value::Null) => true, // NULL is valid for any type if column is nullable
             _ => false,
         }

@@ -27,10 +27,7 @@ pub fn evaluate_expr(row: &Row, expr: &Expr) -> Value {
             evaluate_binary_op(&left_val, op, &right_val)
         }
 
-        Expr::Function { name: _, args: _ } => {
-            // TODO: Implement function calls
-            Value::Null
-        }
+        Expr::Function { name, args } => evaluate_function(row, name, args),
     }
 }
 
@@ -139,6 +136,122 @@ fn to_bool(val: &Value) -> bool {
         Value::Text(s) => !s.is_empty(),
         Value::Null => false,
         _ => false,
+    }
+}
+
+/// Evaluate function calls (built-in functions)
+fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
+    let name_upper = name.to_uppercase();
+
+    match name_upper.as_str() {
+        // Vector distance functions (pgvector-compatible)
+        "VECTOR_DISTANCE" | "L2_DISTANCE" => {
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let arg1 = evaluate_expr(row, &args[0]);
+            let arg2 = evaluate_expr(row, &args[1]);
+
+            if let Some(distance) = arg1.l2_distance(&arg2) {
+                Value::Float(ordered_float::OrderedFloat(distance as f64))
+            } else {
+                Value::Null
+            }
+        }
+
+        "COSINE_DISTANCE" => {
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let arg1 = evaluate_expr(row, &args[0]);
+            let arg2 = evaluate_expr(row, &args[1]);
+
+            if let Some(distance) = arg1.cosine_distance(&arg2) {
+                Value::Float(ordered_float::OrderedFloat(distance as f64))
+            } else {
+                Value::Null
+            }
+        }
+
+        "INNER_PRODUCT" => {
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let arg1 = evaluate_expr(row, &args[0]);
+            let arg2 = evaluate_expr(row, &args[1]);
+
+            if let Some(distance) = arg1.inner_product(&arg2) {
+                Value::Float(ordered_float::OrderedFloat(distance as f64))
+            } else {
+                Value::Null
+            }
+        }
+
+        // String functions
+        "UPPER" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let arg = evaluate_expr(row, &args[0]);
+            if let Value::Text(s) = arg {
+                Value::Text(s.to_uppercase())
+            } else {
+                Value::Null
+            }
+        }
+
+        "LOWER" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let arg = evaluate_expr(row, &args[0]);
+            if let Value::Text(s) = arg {
+                Value::Text(s.to_lowercase())
+            } else {
+                Value::Null
+            }
+        }
+
+        "LENGTH" | "LEN" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let arg = evaluate_expr(row, &args[0]);
+            match arg {
+                Value::Text(s) => Value::Integer(s.len() as i64),
+                Value::Vector(v) => Value::Integer(v.len() as i64),
+                Value::Blob(b) => Value::Integer(b.len() as i64),
+                _ => Value::Null,
+            }
+        }
+
+        // Math functions
+        "ABS" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let arg = evaluate_expr(row, &args[0]);
+            match arg {
+                Value::Integer(i) => Value::Integer(i.abs()),
+                Value::Float(f) => Value::Float(ordered_float::OrderedFloat(f.abs())),
+                _ => Value::Null,
+            }
+        }
+
+        "ROUND" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let arg = evaluate_expr(row, &args[0]);
+            if let Value::Float(f) = arg {
+                Value::Integer(f.round() as i64)
+            } else {
+                Value::Null
+            }
+        }
+
+        // Unknown function
+        _ => Value::Null,
     }
 }
 
