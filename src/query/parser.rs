@@ -338,6 +338,17 @@ impl QueryParser {
             sql_ast::BinaryOperator::GtEq => Ok(BinaryOperator::GtEq),
             sql_ast::BinaryOperator::And => Ok(BinaryOperator::And),
             sql_ast::BinaryOperator::Or => Ok(BinaryOperator::Or),
+            // Vector distance operators (pgvector-compatible)
+            sql_ast::BinaryOperator::Spaceship => Ok(BinaryOperator::CosineDistance), // <=> operator
+            sql_ast::BinaryOperator::Custom(op_str) => match op_str.as_str() {
+                "<->" => Ok(BinaryOperator::L2Distance),
+                "<=>" => Ok(BinaryOperator::CosineDistance),
+                "<#>" => Ok(BinaryOperator::InnerProduct),
+                _ => Err(NexusError::ParseError(format!(
+                    "Unsupported custom operator: {}",
+                    op_str
+                ))),
+            },
             _ => Err(NexusError::ParseError(format!(
                 "Unsupported binary operator: {:?}",
                 op

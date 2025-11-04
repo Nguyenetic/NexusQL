@@ -88,7 +88,17 @@ impl NexusDB {
     ///
     /// # Example
     /// ```javascript
-    /// await db.insertVector('embeddings', [0.1, 0.2, 0.3], { id: 1, text: 'hello' });
+    /// // Simple usage (embedding added automatically)
+    /// await db.insertVector('embeddings', [0.1, 0.2, 0.3], JSON.stringify({ id: 1, text: 'hello' }));
+    ///
+    /// // MCP Sage style (specify embedding column explicitly)
+    /// await db.insertVector('memories', vector, JSON.stringify({
+    ///     user_id: 'user123',
+    ///     content: 'User prefers TypeScript',
+    ///     memory_level: 'user',
+    ///     metadata: '{"confidence": 0.95}',
+    ///     created_at: '2024-11-03T00:00:00Z'
+    /// }));
     /// ```
     #[napi]
     pub async fn insert_vector(
@@ -119,13 +129,17 @@ impl NexusDB {
             if let serde_json::Value::Object(map) = meta {
                 // Preserve insertion order from JSON (serde_json preserves order)
                 for (key, value) in map {
+                    // Skip embedding if present in metadata - we'll use the vector parameter
+                    if key == "embedding" {
+                        continue;
+                    }
                     columns.push(key);
                     values.push(json_value_to_sql(&value));
                 }
             }
         }
 
-        // Add embedding column last
+        // Always add embedding column from vector parameter
         columns.push("embedding".to_string());
         values.push(format!("'{}'", vector_str));
 
