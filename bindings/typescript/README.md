@@ -4,22 +4,16 @@ AI-Native, PostgreSQL-compatible database for Node.js applications.
 
 ## Installation
 
-### From GitHub Packages (Private)
+### From NPM (Recommended)
 
 ```bash
-npm install @nhoy/nexusql
+npm install @nguyenetic/nexusql
 ```
 
-### From GitHub Repository (Free Alternative)
+### From GitHub Repository
 
 ```bash
 npm install git+https://github.com/johnhnguyen97/NexusQL.git#master
-```
-
-### From NPM (If Published Publicly)
-
-```bash
-npm install @nhoy/nexusql
 ```
 
 ## Quick Start
