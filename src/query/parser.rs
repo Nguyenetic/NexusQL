@@ -5,17 +5,17 @@ use crate::query::ast::*;
 use crate::types::Value;
 use crate::{NexusError, Result};
 use sqlparser::ast as sql_ast;
-use sqlparser::dialect::GenericDialect;
+use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser as SqlParser;
 
 pub struct QueryParser {
-    dialect: GenericDialect,
+    dialect: PostgreSqlDialect,
 }
 
 impl QueryParser {
     pub fn new() -> Self {
         Self {
-            dialect: GenericDialect {},
+            dialect: PostgreSqlDialect {},
         }
     }
 

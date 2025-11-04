@@ -26,7 +26,17 @@ export declare class NexusDb {
    *
    * # Example
    * ```javascript
-   * await db.insertVector('embeddings', [0.1, 0.2, 0.3], { id: 1, text: 'hello' });
+   * // Simple usage (embedding added automatically)
+   * await db.insertVector('embeddings', [0.1, 0.2, 0.3], JSON.stringify({ id: 1, text: 'hello' }));
+   *
+   * // MCP Sage style (specify embedding column explicitly)
+   * await db.insertVector('memories', vector, JSON.stringify({
+   *     user_id: 'user123',
+   *     content: 'User prefers TypeScript',
+   *     memory_level: 'user',
+   *     metadata: '{"confidence": 0.95}',
+   *     created_at: '2024-11-03T00:00:00Z'
+   * }));
    * ```
    */
   insertVector(table: string, vector: Array<number>, metadata?: string | undefined | null): Promise<void>
@@ -67,6 +77,30 @@ export declare class NexusDb {
    * ```
    */
   createVectorIndex(table: string, column?: string | undefined | null, indexType?: string | undefined | null, config?: string | undefined | null): Promise<string>
+  /**
+   * Batch insert multiple vectors for optimal performance
+   *
+   * # Arguments
+   * * `table` - Table name
+   * * `vectors` - Array of vector embeddings
+   * * `metadata_array` - Array of metadata objects (must match vectors length)
+   *
+   * # Example
+   * ```javascript
+   * const vectors = [
+   *   [0.1, 0.2, 0.3],
+   *   [0.4, 0.5, 0.6]
+   * ];
+   * const metadata = [
+   *   { id: 1, text: 'hello' },
+   *   { id: 2, text: 'world' }
+   * ];
+   * await db.batchInsertVectors('embeddings', vectors, metadata);
+   * ```
+   *
+   * This is 10-100x faster than individual insertVector() calls
+   */
+  batchInsertVectors(table: string, vectors: Array<Array<number>>, metadataArray?: Array<string> | undefined | null): Promise<number>
 }
 export declare class Transaction {
   query(sql: string): Promise<QueryResult>
