@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A single value in the database
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Value {
     Null,
     Integer(i64),
@@ -13,6 +13,9 @@ pub enum Value {
     Text(String),
     Blob(Vec<u8>),
     Boolean(bool),
+    /// Vector type for semantic search and embeddings
+    /// Stored as f32 for efficiency (same as pgvector default)
+    Vector(Vec<f32>),
 }
 
 // Helper functions for f64 serialization
@@ -43,6 +46,86 @@ impl std::fmt::Display for Value {
             Value::Text(s) => write!(f, "{}", s),
             Value::Blob(b) => write!(f, "<blob {} bytes>", b.len()),
             Value::Boolean(b) => write!(f, "{}", b),
+            Value::Vector(v) => write!(
+                f,
+                "[{}]",
+                v.iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
+    }
+}
+
+impl Value {
+    /// Calculate L2 (Euclidean) distance between two vectors
+    /// Distance = sqrt(sum((a[i] - b[i])^2))
+    pub fn l2_distance(&self, other: &Self) -> Option<f32> {
+        match (self, other) {
+            (Value::Vector(a), Value::Vector(b)) if a.len() == b.len() => {
+                let sum: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum();
+                Some(sum.sqrt())
+            }
+            _ => None,
+        }
+    }
+
+    /// Calculate cosine distance between two vectors
+    /// Distance = 1 - cosine_similarity
+    /// Cosine similarity = dot_product / (norm_a * norm_b)
+    pub fn cosine_distance(&self, other: &Self) -> Option<f32> {
+        match (self, other) {
+            (Value::Vector(a), Value::Vector(b)) if a.len() == b.len() => {
+                let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+                let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+                let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+                if norm_a == 0.0 || norm_b == 0.0 {
+                    return Some(1.0); // Maximum distance
+                }
+
+                let cosine_sim = dot_product / (norm_a * norm_b);
+                Some(1.0 - cosine_sim)
+            }
+            _ => None,
+        }
+    }
+
+    /// Calculate inner product (negative for distance-based sorting)
+    /// Used for normalized vectors where higher values = more similar
+    pub fn inner_product(&self, other: &Self) -> Option<f32> {
+        match (self, other) {
+            (Value::Vector(a), Value::Vector(b)) if a.len() == b.len() => {
+                let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+                Some(-dot_product) // Negative so ORDER BY works correctly
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Eq for Value {}
+
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Discriminant for the variant
+        std::mem::discriminant(self).hash(state);
+
+        match self {
+            Value::Null => {}
+            Value::Integer(i) => i.hash(state),
+            Value::Float(f) => f.hash(state),
+            Value::Text(s) => s.hash(state),
+            Value::Blob(b) => b.hash(state),
+            Value::Boolean(b) => b.hash(state),
+            Value::Vector(v) => {
+                // Hash vectors by converting f32 to bits
+                v.len().hash(state);
+                for f in v {
+                    f.to_bits().hash(state);
+                }
+            }
         }
     }
 }

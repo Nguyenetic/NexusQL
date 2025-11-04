@@ -8,7 +8,6 @@
 //! 4. Reduced allocations (All)
 
 use crate::types::Value;
-use std::io::Write;
 
 /// Ultra-optimized batch insert builder
 ///
@@ -105,6 +104,17 @@ impl FastBatchInsert {
                     Value::Blob(_) => {
                         self.sql_buffer.push_str("NULL");
                     }
+                    Value::Vector(v) => {
+                        self.sql_buffer.push_str("'[");
+                        for (i, f) in v.iter().enumerate() {
+                            if i > 0 {
+                                self.sql_buffer.push(',');
+                            }
+                            use std::fmt::Write;
+                            let _ = write!(&mut self.sql_buffer, "{}", f);
+                        }
+                        self.sql_buffer.push_str("]'");
+                    }
                 }
             }
 
@@ -160,6 +170,13 @@ impl FastBatchInsert {
                         buffer.push(5); // Type: Blob
                         buffer.extend_from_slice(&(b.len() as u32).to_le_bytes());
                         buffer.extend_from_slice(b);
+                    }
+                    Value::Vector(v) => {
+                        buffer.push(6); // Type: Vector
+                        buffer.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                        for f in v {
+                            buffer.extend_from_slice(&f.to_le_bytes());
+                        }
                     }
                 }
             }

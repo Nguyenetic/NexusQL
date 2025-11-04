@@ -1,13 +1,30 @@
 {
-  "name": "@nhoy/nexusql",
+  "name": "@johnhnguyen97/nexusql",
   "version": "2.4.0",
   "description": "AI-Native, PostgreSQL-compatible database with multi-language support",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "napi": {
+    "name": "nexusql",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin"
+      ]
+    }
+  },
   "scripts": {
-    "build": "tsc",
+    "artifacts": "napi artifacts",
+    "build": "npm run build:native && tsc",
+    "build:native": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "build:ts": "tsc",
     "test": "jest",
-    "prepublish": "npm run build"
+    "prepublish": "npm run build",
+    "universal": "napi universal",
+    "version": "napi version"
   },
   "keywords": [
     "database",
@@ -27,6 +44,9 @@
     "type": "git",
     "url": "https://github.com/johnhnguyen97/NexusQL.git"
   },
+  "publishConfig": {
+     "registry": "https://npm.pkg.github.com"
+  },
   "bugs": {
     "url": "https://github.com/johnhnguyen97/NexusQL/issues"
   },
@@ -45,6 +65,7 @@
   },
   "files": [
     "dist",
+    "nexusql.*.node",
     "README.md",
     "LICENSE"
   ]

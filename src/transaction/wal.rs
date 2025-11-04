@@ -259,7 +259,7 @@ impl WALManager {
     pub fn truncate(&mut self) -> Result<()> {
         // Close current writer
         self.flush()?;
-        drop(&self.writer);
+        // Writer will be dropped when recreated below
 
         // Truncate file
         let _file = OpenOptions::new()

@@ -3,8 +3,8 @@
 
 use crate::query::ast::*;
 use crate::query::evaluator::evaluate_where;
-use crate::types::{Row, ResultSet};
 use crate::storage::Table;
+use crate::types::{ResultSet, Row};
 use crate::Result;
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ impl Executor {
             tables: HashMap::new(),
         }
     }
-    
+
     pub fn execute(&mut self, statement: &Statement) -> Result<ResultSet> {
         match statement {
             Statement::CreateTable { name, columns } => {
@@ -26,8 +26,12 @@ impl Executor {
                 let table = Table::new(name.to_string(), col_names);
                 self.tables.insert(name.to_string(), table);
                 Ok(ResultSet::empty())
-            },
-            Statement::Insert { table, columns: _, values } => {
+            }
+            Statement::Insert {
+                table,
+                columns: _,
+                values,
+            } => {
                 if let Some(t) = self.tables.get_mut(table) {
                     for value_set in values {
                         let row = Row::new(t.columns.clone(), value_set.clone());
@@ -35,32 +39,69 @@ impl Executor {
                     }
                     Ok(ResultSet::empty())
                 } else {
-                    Err(crate::NexusError::QueryError(format!("Table {} not found", table)))
+                    Err(crate::NexusError::QueryError(format!(
+                        "Table {} not found",
+                        table
+                    )))
                 }
-            },
-            Statement::Select { columns, from, where_clause, using_engine: _, limit } => {
-                let table = self.tables.get(from)
-                    .ok_or_else(|| crate::NexusError::QueryError(format!("Table {} not found", from)))?;
-                
+            }
+            Statement::Select {
+                columns: _,
+                from,
+                where_clause,
+                using_engine: _,
+                order_by,
+                limit,
+            } => {
+                let table = self.tables.get(from).ok_or_else(|| {
+                    crate::NexusError::QueryError(format!("Table {} not found", from))
+                })?;
+
                 let mut rows = table.select_all();
-                
+
+                // Apply WHERE clause filter
                 if let Some(expr) = where_clause {
                     rows.retain(|row| evaluate_where(row, expr));
                 }
-                
+
+                // Apply ORDER BY sorting (especially for vector distance)
+                if let Some(order) = order_by {
+                    rows.sort_by(|a, b| {
+                        use crate::query::evaluator::evaluate_expr;
+                        let a_val = evaluate_expr(a, &order.expr);
+                        let b_val = evaluate_expr(b, &order.expr);
+
+                        let cmp = a_val
+                            .partial_cmp(&b_val)
+                            .unwrap_or(std::cmp::Ordering::Equal);
+
+                        if order.ascending {
+                            cmp
+                        } else {
+                            cmp.reverse()
+                        }
+                    });
+                }
+
+                // Apply LIMIT
                 if let Some(lim) = limit {
                     rows.truncate(*lim);
                 }
-                
+
                 Ok(ResultSet::new(rows))
-            },
-            Statement::Update { table, set, where_clause } => {
+            }
+            Statement::Update {
+                table,
+                set,
+                where_clause,
+            } => {
                 if let Some(t) = self.tables.get_mut(table) {
                     for row in &mut t.rows {
-                        let should_update = where_clause.as_ref()
+                        let should_update = where_clause
+                            .as_ref()
                             .map(|expr| evaluate_where(row, expr))
                             .unwrap_or(true);
-                        
+
                         if should_update {
                             for (col_name, new_value) in set {
                                 if let Some(idx) = row.columns.iter().position(|c| c == col_name) {
@@ -71,9 +112,12 @@ impl Executor {
                     }
                     Ok(ResultSet::empty())
                 } else {
-                    Err(crate::NexusError::QueryError(format!("Table {} not found", table)))
+                    Err(crate::NexusError::QueryError(format!(
+                        "Table {} not found",
+                        table
+                    )))
                 }
-            },
+            }
             Statement::Delete { from, where_clause } => {
                 if let Some(t) = self.tables.get_mut(from) {
                     if let Some(expr) = where_clause {
@@ -83,16 +127,19 @@ impl Executor {
                     }
                     Ok(ResultSet::empty())
                 } else {
-                    Err(crate::NexusError::QueryError(format!("Table {} not found", from)))
+                    Err(crate::NexusError::QueryError(format!(
+                        "Table {} not found",
+                        from
+                    )))
                 }
-            },
+            }
         }
     }
-    
+
     pub fn get_tables(&self) -> &HashMap<String, Table> {
         &self.tables
     }
-    
+
     pub fn get_tables_mut(&mut self) -> &mut HashMap<String, Table> {
         &mut self.tables
     }

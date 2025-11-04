@@ -133,6 +133,12 @@ impl ShardingManager {
             Value::Boolean(b) => b.hash(&mut hasher),
             Value::Blob(b) => b.hash(&mut hasher),
             Value::Null => 0usize.hash(&mut hasher),
+            Value::Vector(v) => {
+                // Hash vectors by their float bits
+                for f in v {
+                    f.to_bits().hash(&mut hasher);
+                }
+            }
         }
         hasher.finish() as usize
     }

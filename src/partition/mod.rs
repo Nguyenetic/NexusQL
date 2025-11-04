@@ -275,6 +275,13 @@ impl PartitionedTable {
             Value::Boolean(b) => b.hash(&mut hasher),
             Value::Null => 0usize.hash(&mut hasher),
             Value::Blob(b) => b.hash(&mut hasher),
+            Value::Vector(v) => {
+                // Hash vectors by hashing their string representation
+                // For proper vector partitioning, use partition keys on metadata fields instead
+                for f in v {
+                    f.to_bits().hash(&mut hasher);
+                }
+            }
         }
         hasher.finish() as usize
     }

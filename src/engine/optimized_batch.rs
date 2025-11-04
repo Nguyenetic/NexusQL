@@ -94,7 +94,7 @@ impl OptimizedBatchEngine {
         rows: Vec<Vec<Value>>,
         sequence_start: u64,
     ) -> Result<usize> {
-        let batch_start = Instant::now();
+        let _batch_start = Instant::now();
         let row_count = rows.len();
 
         // Step 1: Create pre-allocated batch (ClickHouse optimization)
@@ -152,7 +152,7 @@ impl OptimizedBatchEngine {
     /// Flush all pending writes (ensures durability)
     pub async fn flush(&self) -> Result<()> {
         // Group commit flush (PostgreSQL)
-        let result = self
+        let _result = self
             .async_buffer
             .group_commit_flush(|_ops| async { Ok(()) })
             .await?;

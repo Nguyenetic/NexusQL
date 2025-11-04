@@ -228,6 +228,16 @@ impl JsonbFunctions {
             Value::Boolean(b) => serde_json::Value::Bool(b),
             Value::Null => serde_json::Value::Null,
             Value::Blob(_) => serde_json::Value::Null,
+            Value::Vector(v) => {
+                // Convert vector to JSON array of numbers
+                let nums: Vec<serde_json::Value> = v
+                    .into_iter()
+                    .filter_map(|f| {
+                        serde_json::Number::from_f64(f as f64).map(serde_json::Value::Number)
+                    })
+                    .collect();
+                serde_json::Value::Array(nums)
+            }
         })
     }
 

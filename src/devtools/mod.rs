@@ -1,7 +1,7 @@
 // Developer Tools
 // SQL formatter, linter, schema diff, import/export utilities
 
-use crate::types::{Row, Value};
+use crate::types::Row;
 use crate::{NexusError, Result};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};

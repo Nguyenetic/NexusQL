@@ -155,7 +155,7 @@ impl NexusSQL {
 
         // Optimize query
         let optimizer = Optimizer::new();
-        let optimized = optimizer.optimize(statement)?;
+        let _optimized = optimizer.optimize(statement)?;
 
         // Execute optimized query
         self.kernel.execute(sql).await

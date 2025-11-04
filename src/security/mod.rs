@@ -2,8 +2,7 @@
 // Enterprise-grade security features
 
 use crate::{NexusError, Result};
-use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
