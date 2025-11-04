@@ -121,7 +121,14 @@ nexus/
 
 ### Installation
 
-#### Install from GitHub (Recommended)
+#### Install from npm (Recommended)
+
+**Node.js/TypeScript:**
+```bash
+npm install @nguyenetic/nexusql
+```
+
+#### Install from GitHub
 
 **Node.js/TypeScript:**
 ```bash
