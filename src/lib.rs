@@ -10,6 +10,7 @@ pub mod query;
 pub mod router;
 pub mod storage;
 pub mod types;
+pub mod vector;
 
 // Week 5-6: Advanced Features
 pub mod adaptive;
