@@ -15,9 +15,8 @@
 7. [Building the Native Module](#building-the-native-module)
 8. [Testing Locally](#testing-locally)
 9. [Publishing to npm](#publishing-to-npm)
-10. [Publishing to GitHub Packages](#publishing-to-github-packages)
-11. [Cross-Platform Builds](#cross-platform-builds)
-12. [Troubleshooting](#troubleshooting)
+10. [Cross-Platform Builds](#cross-platform-builds)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -575,32 +574,7 @@ npm run build
 npm publish --access public
 ```
 
-### Option 2: GitHub Packages (Free for Private)
-
-```bash
-# 1. Create .npmrc with GitHub token
-echo "@johnhnguyen97:registry=https://npm.pkg.github.com" > .npmrc
-echo "//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN" >> .npmrc
-
-# 2. Update package.json
-{
-  "name": "@johnhnguyen97/nexusql",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/johnhnguyen97/NexusQL.git"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  }
-}
-
-# 3. Publish
-npm publish
-```
-
-### Step-by-Step GitHub Packages Setup
-
-See our separate guide: [GITHUB_PACKAGES_SETUP.md](../../GITHUB_PACKAGES_SETUP.md)
+**Note**: Package is published to npmjs.com as `@nguyenetic/nexusql`
 
 ---
 

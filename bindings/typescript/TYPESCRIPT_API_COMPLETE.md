@@ -25,10 +25,10 @@
 
 ## Installation
 
-### From npm (GitHub Packages)
+### From npm
 
 ```bash
-npm install @johnhnguyen97/nexusql
+npm install @nguyenetic/nexusql
 ```
 
 ### From GitHub Repository (Free)
