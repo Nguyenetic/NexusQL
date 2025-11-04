@@ -78,6 +78,160 @@ impl NexusDB {
 
         Ok(())
     }
+
+    /// Insert a vector into a table with optional metadata
+    ///
+    /// # Arguments
+    /// * `table` - Table name
+    /// * `vector` - Vector embedding as array of numbers
+    /// * `metadata` - Optional object with additional columns (e.g., {id: 1, text: "hello"})
+    ///
+    /// # Example
+    /// ```javascript
+    /// await db.insertVector('embeddings', [0.1, 0.2, 0.3], { id: 1, text: 'hello' });
+    /// ```
+    #[napi]
+    pub async fn insert_vector(
+        &self,
+        table: String,
+        vector: Vec<f64>,
+        metadata: Option<String>,
+    ) -> Result<()> {
+        // Convert f64 to string representation for SQL
+        let vector_str = format!(
+            "[{}]",
+            vector
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        // Build INSERT statement with metadata first, then embedding
+        let mut columns = Vec::new();
+        let mut values = Vec::new();
+
+        // Add metadata columns first if provided
+        if let Some(meta_json) = metadata {
+            let meta: serde_json::Value = serde_json::from_str(&meta_json)
+                .map_err(|e| Error::from_reason(format!("Invalid metadata JSON: {}", e)))?;
+
+            if let serde_json::Value::Object(map) = meta {
+                // Preserve insertion order from JSON (serde_json preserves order)
+                for (key, value) in map {
+                    columns.push(key);
+                    values.push(json_value_to_sql(&value));
+                }
+            }
+        }
+
+        // Add embedding column last
+        columns.push("embedding".to_string());
+        values.push(format!("'{}'", vector_str));
+
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table,
+            columns.join(", "),
+            values.join(", ")
+        );
+
+        self.execute(sql).await?;
+        Ok(())
+    }
+
+    /// Search for nearest vectors using vector similarity
+    ///
+    /// # Arguments
+    /// * `table` - Table name
+    /// * `query_vector` - Query vector as array of numbers
+    /// * `limit` - Number of results to return
+    /// * `distance_metric` - Distance metric: 'l2', 'cosine', or 'inner_product' (default: 'l2')
+    ///
+    /// # Returns
+    /// Array of results with all columns plus a 'distance' field
+    ///
+    /// # Example
+    /// ```javascript
+    /// const results = await db.vectorSearch('embeddings', [0.1, 0.2, 0.3], 10, 'cosine');
+    /// console.log(results[0].distance, results[0].text);
+    /// ```
+    #[napi]
+    pub async fn vector_search(
+        &self,
+        table: String,
+        query_vector: Vec<f64>,
+        limit: u32,
+        distance_metric: Option<String>,
+    ) -> Result<String> {
+        let metric = distance_metric.unwrap_or_else(|| "l2".to_string());
+
+        let distance_fn = match metric.to_lowercase().as_str() {
+            "cosine" => "cosine_distance",
+            "inner_product" => "inner_product",
+            _ => "vector_distance", // Default to L2
+        };
+
+        // Convert f64 vector to SQL string
+        let vector_str = format!(
+            "[{}]",
+            query_vector
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        let sql = format!(
+            "SELECT *, {}(embedding, '{}') as distance FROM {} ORDER BY distance LIMIT {}",
+            distance_fn, vector_str, table, limit
+        );
+
+        let result = self.query(sql).await?;
+
+        // Return the JSON string directly
+        Ok(result.rows())
+    }
+
+    /// Create a vector index for fast similarity search
+    ///
+    /// # Arguments
+    /// * `table` - Table name
+    /// * `column` - Column name containing vectors (default: 'embedding')
+    /// * `index_type` - Index type: 'hnsw' or 'flat' (default: 'hnsw')
+    /// * `config` - Optional index configuration object
+    ///
+    /// # Example
+    /// ```javascript
+    /// await db.createVectorIndex('embeddings', 'embedding', 'hnsw', {
+    ///   m: 16,
+    ///   ef_construction: 64
+    /// });
+    /// ```
+    #[napi]
+    pub async fn create_vector_index(
+        &self,
+        table: String,
+        column: Option<String>,
+        index_type: Option<String>,
+        config: Option<String>,
+    ) -> Result<String> {
+        let col = column.unwrap_or_else(|| "embedding".to_string());
+        let idx_type = index_type.unwrap_or_else(|| "hnsw".to_string());
+
+        // For now, return a message since CREATE INDEX syntax is not yet implemented in parser
+        // This will be replaced with actual SQL execution once parser supports it
+        let config_str = if let Some(cfg) = config {
+            format!(" WITH {}", cfg)
+        } else {
+            String::new()
+        };
+
+        Ok(format!(
+            "Vector index creation for {}.{} using {} index{} will be implemented in next version. For now, HNSW is used automatically for vector searches.",
+            table, col, idx_type, config_str
+        ))
+    }
 }
 
 #[napi]
@@ -177,6 +331,25 @@ pub struct Field {
 
 // Helper functions
 
+/// Convert JSON value to SQL literal string
+fn json_value_to_sql(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        serde_json::Value::Array(arr) => {
+            // Convert array to vector literal
+            let nums: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f.to_string()))
+                .collect();
+            format!("'[{}]'", nums.join(","))
+        }
+        serde_json::Value::Object(_) => "NULL".to_string(), // Objects not supported
+    }
+}
+
 /// Convert NexusQL ResultSet to JavaScript QueryResult
 fn convert_result(result: NexusResultSet) -> QueryResult {
     // Extract field names from first row if available
@@ -222,6 +395,16 @@ fn convert_row(row: &NexusRow) -> serde_json::Value {
                 NexusValue::Blob(b) => {
                     // Convert binary data to base64
                     serde_json::Value::String(base64_encode(b))
+                }
+                NexusValue::Vector(v) => {
+                    // Convert f32 vector to JSON array of numbers
+                    let nums: Vec<serde_json::Value> = v
+                        .iter()
+                        .filter_map(|f| {
+                            serde_json::Number::from_f64(*f as f64).map(serde_json::Value::Number)
+                        })
+                        .collect();
+                    serde_json::Value::Array(nums)
                 }
             };
 

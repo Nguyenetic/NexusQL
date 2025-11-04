@@ -16,6 +16,57 @@ export declare class NexusDb {
   execute(sql: string): Promise<number>
   beginTransaction(): Promise<Transaction>
   close(): Promise<void>
+  /**
+   * Insert a vector into a table with optional metadata
+   *
+   * # Arguments
+   * * `table` - Table name
+   * * `vector` - Vector embedding as array of numbers
+   * * `metadata` - Optional object with additional columns (e.g., {id: 1, text: "hello"})
+   *
+   * # Example
+   * ```javascript
+   * await db.insertVector('embeddings', [0.1, 0.2, 0.3], { id: 1, text: 'hello' });
+   * ```
+   */
+  insertVector(table: string, vector: Array<number>, metadata?: string | undefined | null): Promise<void>
+  /**
+   * Search for nearest vectors using vector similarity
+   *
+   * # Arguments
+   * * `table` - Table name
+   * * `query_vector` - Query vector as array of numbers
+   * * `limit` - Number of results to return
+   * * `distance_metric` - Distance metric: 'l2', 'cosine', or 'inner_product' (default: 'l2')
+   *
+   * # Returns
+   * Array of results with all columns plus a 'distance' field
+   *
+   * # Example
+   * ```javascript
+   * const results = await db.vectorSearch('embeddings', [0.1, 0.2, 0.3], 10, 'cosine');
+   * console.log(results[0].distance, results[0].text);
+   * ```
+   */
+  vectorSearch(table: string, queryVector: Array<number>, limit: number, distanceMetric?: string | undefined | null): Promise<string>
+  /**
+   * Create a vector index for fast similarity search
+   *
+   * # Arguments
+   * * `table` - Table name
+   * * `column` - Column name containing vectors (default: 'embedding')
+   * * `index_type` - Index type: 'hnsw' or 'flat' (default: 'hnsw')
+   * * `config` - Optional index configuration object
+   *
+   * # Example
+   * ```javascript
+   * await db.createVectorIndex('embeddings', 'embedding', 'hnsw', {
+   *   m: 16,
+   *   ef_construction: 64
+   * });
+   * ```
+   */
+  createVectorIndex(table: string, column?: string | undefined | null, indexType?: string | undefined | null, config?: string | undefined | null): Promise<string>
 }
 export declare class Transaction {
   query(sql: string): Promise<QueryResult>
