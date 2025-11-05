@@ -107,6 +107,29 @@ impl NexusDB {
         self.execute_with_params(sql, None).await
     }
 
+    /// Create a prepared statement for executing the same query multiple times with different parameters
+    ///
+    /// # Arguments
+    /// * `sql` - SQL statement with $1, $2, etc. placeholders
+    ///
+    /// # Returns
+    /// PreparedStatement that can be executed multiple times
+    ///
+    /// # Example
+    /// ```javascript
+    /// const stmt = await db.prepare('INSERT INTO users (id, name) VALUES ($1, $2)');
+    /// await stmt.execute(1, 'Alice');
+    /// await stmt.execute(2, 'Bob');
+    /// await stmt.close();
+    /// ```
+    #[napi]
+    pub async fn prepare(&self, sql: String) -> Result<PreparedStatement> {
+        Ok(PreparedStatement {
+            db: self.db.clone(),
+            sql,
+        })
+    }
+
     #[napi]
     pub async fn begin_transaction(&self) -> Result<Transaction> {
         let db = self.db.clone();
@@ -466,6 +489,66 @@ impl Transaction {
             .map_err(|e| Error::from_reason(format!("Rollback failed: {}", e)))?;
 
         self.active = false;
+        Ok(())
+    }
+}
+
+/// Prepared statement for executing parameterized queries multiple times
+#[napi]
+pub struct PreparedStatement {
+    db: Arc<Mutex<NexusSQL>>,
+    sql: String,
+}
+
+#[napi]
+impl PreparedStatement {
+    /// Execute the prepared statement with parameters
+    ///
+    /// # Arguments
+    /// * `params` - Variable arguments that will be bound to $1, $2, etc.
+    ///
+    /// # Example
+    /// ```javascript
+    /// const stmt = await db.prepare('SELECT * FROM users WHERE id = $1');
+    /// const result = await stmt.execute(123);
+    /// await stmt.close();
+    /// ```
+    #[napi(ts_args_type = "...params: any[]")]
+    pub async fn execute(
+        &self,
+        params: Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+    ) -> Result<QueryResult> {
+        let db = self.db.clone();
+
+        // Convert parameters to NexusValue
+        let nexus_params: Vec<NexusValue> = params
+            .into_iter()
+            .map(|p| match p {
+                napi::Either::A(s) => NexusValue::Text(s),
+                napi::Either::B(napi::Either::A(i)) => NexusValue::Integer(i),
+                napi::Either::B(napi::Either::B(napi::Either::A(f))) => {
+                    NexusValue::Float(OrderedFloat(f))
+                }
+                napi::Either::B(napi::Either::B(napi::Either::B(b))) => NexusValue::Boolean(b),
+            })
+            .collect();
+
+        let result = db
+            .lock()
+            .await
+            .execute_with_params(&self.sql, Some(nexus_params))
+            .await
+            .map_err(|e| {
+                Error::from_reason(format!("Prepared statement execution failed: {}", e))
+            })?;
+
+        Ok(convert_result(result))
+    }
+
+    /// Close the prepared statement (for consistency with other database APIs)
+    /// Note: In Rust this is a no-op since resources are automatically cleaned up
+    #[napi]
+    pub async fn close(&self) -> Result<()> {
         Ok(())
     }
 }

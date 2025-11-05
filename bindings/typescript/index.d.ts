@@ -43,6 +43,24 @@ export declare class NexusDb {
   executeWithParams(sql: string, params?: any[] | undefined): Promise<number>
   /** Execute a statement without parameters (backward compatible) */
   execute(sql: string): Promise<number>
+  /**
+   * Create a prepared statement for executing the same query multiple times with different parameters
+   *
+   * # Arguments
+   * * `sql` - SQL statement with $1, $2, etc. placeholders
+   *
+   * # Returns
+   * PreparedStatement that can be executed multiple times
+   *
+   * # Example
+   * ```javascript
+   * const stmt = await db.prepare('INSERT INTO users (id, name) VALUES ($1, $2)');
+   * await stmt.execute(1, 'Alice');
+   * await stmt.execute(2, 'Bob');
+   * await stmt.close();
+   * ```
+   */
+  prepare(sql: string): Promise<PreparedStatement>
   beginTransaction(): Promise<Transaction>
   close(): Promise<void>
   /**
@@ -135,4 +153,26 @@ export declare class Transaction {
   query(sql: string): Promise<QueryResult>
   commit(): Promise<void>
   rollback(): Promise<void>
+}
+/** Prepared statement for executing parameterized queries multiple times */
+export declare class PreparedStatement {
+  /**
+   * Execute the prepared statement with parameters
+   *
+   * # Arguments
+   * * `params` - Variable arguments that will be bound to $1, $2, etc.
+   *
+   * # Example
+   * ```javascript
+   * const stmt = await db.prepare('SELECT * FROM users WHERE id = $1');
+   * const result = await stmt.execute(123);
+   * await stmt.close();
+   * ```
+   */
+  execute(...params: any[]): Promise<QueryResult>
+  /**
+   * Close the prepared statement (for consistency with other database APIs)
+   * Note: In Rust this is a no-op since resources are automatically cleaned up
+   */
+  close(): Promise<void>
 }
