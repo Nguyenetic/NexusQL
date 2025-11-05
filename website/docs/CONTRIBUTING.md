@@ -4,15 +4,15 @@ Thank you for your interest in contributing to NexusQL! This document provides g
 
 ## 📋 Table of Contents
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Contribution Workflow](#contribution-workflow)
-- [Coding Standards](#coding-standards)
-- [Testing Requirements](#testing-requirements)
-- [Documentation](#documentation)
-- [Pull Request Process](#pull-request-process)
-- [Issue Guidelines](#issue-guidelines)
+- [📜 Code of Conduct](#-code-of-conduct)
+- [🚀 Getting Started](#-getting-started)
+- [💻 Development Setup](#-development-setup)
+- [🔄 Contribution Workflow](#-contribution-workflow)
+- [🎨 Coding Standards](#-coding-standards)
+- [🧪 Testing Requirements](#-testing-requirements)
+- [📝 Documentation](#-documentation)
+- [🔀 Pull Request Process](#-pull-request-process)
+- [🐛 Issue Guidelines](#-issue-guidelines)
 
 ## 📜 Code of Conduct
 
