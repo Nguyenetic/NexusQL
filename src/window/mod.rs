@@ -499,7 +499,7 @@ impl WindowManager {
 
         let mut results = vec![Value::Null; rows.len()];
 
-        for (partition_key, partition_indices) in partitions {
+        for (_partition_key, partition_indices) in partitions {
             // Get partition rows
             let partition_rows: Vec<&Row> =
                 partition_indices.iter().map(|&idx| &rows[idx]).collect();

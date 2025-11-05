@@ -132,6 +132,7 @@ pub enum PlanNode {
 }
 
 /// Advanced Query Optimizer
+#[allow(dead_code)]
 pub struct AdvancedOptimizer {
     /// Table statistics for cost estimation
     stats: HashMap<String, TableStats>,
@@ -140,6 +141,7 @@ pub struct AdvancedOptimizer {
 }
 
 impl AdvancedOptimizer {
+    #[allow(dead_code)]
     /// Create new optimizer
     pub fn new() -> Self {
         Self {
@@ -290,6 +292,7 @@ impl AdvancedOptimizer {
     }
 
     /// Add aggregate node
+    #[allow(dead_code)]
     fn add_aggregate(
         &self,
         input: PlanNode,
@@ -312,6 +315,7 @@ impl AdvancedOptimizer {
     }
 
     /// Add sort node
+    #[allow(dead_code)]
     fn add_sort(&self, input: PlanNode, keys: Vec<String>) -> PlanNode {
         let input_cost = self.get_plan_cost(&input);
         let mut cost = input_cost.clone();
@@ -329,6 +333,7 @@ impl AdvancedOptimizer {
     }
 
     /// Add projection node
+    #[allow(dead_code)]
     fn add_project(&self, input: PlanNode, columns: Vec<String>) -> PlanNode {
         let cost = self.get_plan_cost(&input);
 

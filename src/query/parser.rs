@@ -13,6 +13,7 @@ pub struct QueryParser {
 }
 
 impl QueryParser {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             dialect: PostgreSqlDialect {},
@@ -51,38 +52,23 @@ impl QueryParser {
             }),
 
             sql_ast::Statement::StartTransaction { .. } => {
-                // Handle BEGIN / START TRANSACTION - just return empty result
-                Ok(Statement::Select {
-                    columns: vec![SelectItem::Wildcard],
-                    from: String::new(),
-                    where_clause: None,
-                    using_engine: None,
-                    order_by: None,
-                    limit: None,
+                // Handle BEGIN / START TRANSACTION
+                Ok(Statement::Transaction {
+                    operation: TransactionOp::Begin,
                 })
             }
 
             sql_ast::Statement::Commit { .. } => {
-                // Handle COMMIT - just return empty result
-                Ok(Statement::Select {
-                    columns: vec![SelectItem::Wildcard],
-                    from: String::new(),
-                    where_clause: None,
-                    using_engine: None,
-                    order_by: None,
-                    limit: None,
+                // Handle COMMIT
+                Ok(Statement::Transaction {
+                    operation: TransactionOp::Commit,
                 })
             }
 
             sql_ast::Statement::Rollback { .. } => {
-                // Handle ROLLBACK - just return empty result
-                Ok(Statement::Select {
-                    columns: vec![SelectItem::Wildcard],
-                    from: String::new(),
-                    where_clause: None,
-                    using_engine: None,
-                    order_by: None,
-                    limit: None,
+                // Handle ROLLBACK
+                Ok(Statement::Transaction {
+                    operation: TransactionOp::Rollback,
                 })
             }
 
@@ -443,6 +429,7 @@ impl QueryParser {
         })
     }
 
+    #[allow(dead_code)]
     fn convert_value_expr(&self, expr: &sql_ast::Expr) -> Result<Value> {
         match expr {
             sql_ast::Expr::Value(val) => match val {

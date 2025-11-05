@@ -240,7 +240,7 @@ impl ViewManager {
     }
 
     /// Validate update against view's WITH CHECK OPTION
-    pub fn validate_update(&self, view_name: &str, new_row: &Row) -> Result<()> {
+    pub fn validate_update(&self, view_name: &str, _new_row: &Row) -> Result<()> {
         let views = self.views.lock().unwrap();
 
         if let Some(view) = views.get(view_name) {

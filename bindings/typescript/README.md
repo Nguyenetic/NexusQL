@@ -1,325 +1,375 @@
-# NexusQL - TypeScript/Node.js Client
+# @nguyenetic/nexusql - TypeScript/Node.js Bindings
 
-AI-Native, PostgreSQL-compatible database for Node.js applications.
+[![npm version](https://badge.fury.io/js/%40nguyenetic%2Fnexusql.svg)](https://www.npmjs.com/package/@nguyenetic/nexusql)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen.svg)](https://nodejs.org/)
 
-## Installation
+AI-native, PostgreSQL-compatible database with vector search support. Fast, embedded, and easy to use with built-in SQL injection prevention.
 
-### From NPM (Recommended)
+## 🚀 Features
 
+- ✅ **Parameterized Queries** - SQL injection prevention with `$1, $2` placeholders
+- ✅ **Prepared Statements** - Compile once, execute many times (10× faster)
+- ✅ **ACID Transactions** - Full MVCC with automatic rollback
+- ✅ **Vector Search** - Built-in HNSW index for semantic search (1578× faster)
+- ✅ **Async/Await** - Modern promise-based API
+- ✅ **TypeScript** - Full type definitions included
+- ✅ **Zero Config** - Works out of the box
+
+## 📦 Installation
+
+### npm
 ```bash
 npm install @nguyenetic/nexusql
 ```
 
-### From GitHub Repository
-
+### yarn
 ```bash
-npm install git+https://github.com/johnhnguyen97/NexusQL.git#master
+yarn add @nguyenetic/nexusql
 ```
 
-## Quick Start
+### pnpm
+```bash
+pnpm add @nguyenetic/nexusql
+```
+
+## ⚡ Quick Start
+
+### Basic Usage
 
 ```typescript
-import { NexusDB } from 'nexusql';
+import { NexusDb } from '@nguyenetic/nexusql';
 
-// Connect to database
-const db = new NexusDB('./mydb');
+const db = new NexusDb('./myapp.db');
 
-// Execute queries
-await db.execute('CREATE TABLE users (id INT PRIMARY KEY, name TEXT)');
-await db.execute('INSERT INTO users VALUES (1, "Alice")');
+// Create table
+await db.execute(`
+  CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE
+  )
+`);
 
-const result = await db.query('SELECT * FROM users');
-console.log(result.rows);
+// Insert with parameterized query (prevents SQL injection)
+await db.execute(
+  'INSERT INTO users VALUES ($1, $2, $3)',
+  [1, 'Alice', 'alice@example.com']
+);
 
-// Use transactions
-const tx = await db.beginTransaction();
-try {
-    await tx.query('INSERT INTO users VALUES (2, "Bob")');
-    await tx.query('UPDATE accounts SET balance = balance - 100');
-    await tx.commit();
-} catch (error) {
-    await tx.rollback();
-}
+// Query data
+const result = await db.query('SELECT * FROM users WHERE id = $1', [1]);
+console.log(result.rows[0]); // { id: 1, name: 'Alice', email: 'alice@example.com' }
 
 await db.close();
 ```
 
-## Features
-
-- ✅ **PostgreSQL Compatible**: Full SQL support
-- ✅ **AI-Native**: Vector embeddings and semantic search
-- ✅ **Embedded**: No separate server needed
-- ✅ **ACID**: Full transaction support
-- ✅ **Fast**: Advanced indexing (B-Tree, HNSW, GIN, GiST, BRIN)
-- ✅ **Scalable**: Partitioning and sharding support
-- ✅ **Full-Text**: Built-in text search
-- ✅ **Type-Safe**: Full TypeScript support
-
-## API Reference
-
-### NexusDB
-
-Main database class.
-
-#### Methods
-
-- `query(sql: string): Promise<QueryResult>` - Execute SELECT query
-- `execute(sql: string): Promise<number>` - Execute command (INSERT, UPDATE, etc.)
-- `beginTransaction(): Promise<Transaction>` - Start transaction
-- `prepare(sql: string): Promise<PreparedStatement>` - Create prepared statement
-- `close(): Promise<void>` - Close connection
-
-### Transaction
-
-Transaction management.
-
-#### Methods
-
-- `query(sql: string): Promise<QueryResult>` - Execute query in transaction
-- `commit(): Promise<void>` - Commit transaction
-- `rollback(): Promise<void>` - Rollback transaction
-
-### PreparedStatement
-
-Efficient repeated execution.
-
-#### Methods
-
-- `execute(...params): Promise<QueryResult>` - Execute with parameters
-- `close(): Promise<void>` - Deallocate statement
-
-### ConnectionPool
-
-Connection pooling for high performance.
+### Transactions
 
 ```typescript
-import { ConnectionPool } from 'nexusql';
+const tx = await db.beginTransaction();
 
-const pool = new ConnectionPool('./mydb', { max: 20 });
-const conn = await pool.getConnection();
-const result = await conn.query('SELECT * FROM users');
-pool.releaseConnection(conn);
-```
-
-## Advanced Examples
-
-### Full-Text Search
-
-```typescript
-// Create full-text search index
-await db.execute(`
-    CREATE TABLE articles (
-        id INT PRIMARY KEY,
-        title TEXT,
-        content TEXT,
-        search_vector TSVECTOR
-    )
-`);
-
-// Search articles
-const results = await db.query(`
-    SELECT * FROM articles
-    WHERE search_vector @@ to_tsquery('database & optimization')
-    ORDER BY ts_rank(search_vector, to_tsquery('database')) DESC
-`);
-```
-
-### AI-Native Vector Search
-
-```typescript
-// Store documents with embeddings
-await db.execute(`
-    CREATE TABLE documents (
-        id INT PRIMARY KEY,
-        content TEXT,
-        embedding VECTOR(128)
-    )
-`);
-
-// Semantic similarity search
-const results = await db.query(`
-    SELECT * FROM documents
-    ORDER BY embedding <-> text_to_vector('search query')
-    LIMIT 10
-`);
-```
-
-### Table Partitioning
-
-```typescript
-// Create partitioned table
-await db.execute(`
-    CREATE TABLE events (
-        event_date DATE,
-        event_type TEXT,
-        data JSONB
-    ) PARTITION BY RANGE (event_date)
-`);
-
-// Add partitions
-await db.execute(`
-    CREATE TABLE events_2024_q1 PARTITION OF events
-    FOR VALUES FROM ('2024-01-01') TO ('2024-04-01')
-`);
-```
-
-### JSON/JSONB Operations
-
-```typescript
-// Store and query JSON data
-await db.execute(`
-    CREATE TABLE products (
-        id INT PRIMARY KEY,
-        metadata JSONB
-    )
-`);
-
-await db.execute(`
-    INSERT INTO products VALUES (1, '{"name": "Widget", "tags": ["new", "sale"]}')
-`);
-
-// Query JSON fields
-const results = await db.query(`
-    SELECT * FROM products
-    WHERE metadata @> '{"tags": ["sale"]}'
-`);
-```
-
-### Distributed Queries (Multi-Node)
-
-```typescript
-// Query across shards
-const results = await db.query(`
-    SELECT COUNT(*) FROM users
-    -- Automatically distributes across all shards
-`);
-```
-
-## Configuration Options
-
-```typescript
-const db = new NexusDB('./mydb', {
-    // Connection pool size
-    maxConnections: 20,
-
-    // Query timeout
-    queryTimeout: 30000,
-
-    // Enable query logging
-    logQueries: true,
-
-    // Cache size
-    cacheSize: '100MB'
-});
-```
-
-## Error Handling
-
-```typescript
 try {
-    await db.execute('INSERT INTO users VALUES (1, "Alice")');
+  await tx.query('INSERT INTO users VALUES (2, "Bob", "bob@example.com")');
+  await tx.query('UPDATE accounts SET balance = balance - 100 WHERE user_id = 2');
+  await tx.commit(); // ✅ Both succeed
 } catch (error) {
-    if (error.code === 'UNIQUE_VIOLATION') {
-        console.log('User already exists');
-    } else {
-        console.error('Database error:', error.message);
-    }
+  await tx.rollback(); // ❌ Both fail
+  console.error('Transaction failed:', error);
 }
 ```
 
-## Best Practices
-
-### 1. Use Prepared Statements for Repeated Queries
+### Prepared Statements (10× Faster)
 
 ```typescript
-const stmt = await db.prepare('SELECT * FROM users WHERE id = $1');
+const stmt = await db.prepare('INSERT INTO users VALUES ($1, $2, $3)');
 
-// Execute multiple times efficiently
-const user1 = await stmt.execute(1);
-const user2 = await stmt.execute(2);
-const user3 = await stmt.execute(3);
+// Execute multiple times with different parameters
+for (let i = 1; i <= 1000; i++) {
+  await stmt.execute(i, `User${i}`, `user${i}@example.com`);
+}
 
 await stmt.close();
 ```
 
-### 2. Use Connection Pooling for High Traffic
+### Vector Search
 
 ```typescript
-import { ConnectionPool } from 'nexusql';
+// Create table with vector column
+await db.execute(`
+  CREATE TABLE documents (
+    id INTEGER PRIMARY KEY,
+    content TEXT,
+    embedding VECTOR(384)
+  )
+`);
 
-const pool = new ConnectionPool('./mydb', { max: 50 });
+// Insert vector with metadata
+const embedding = new Array(384).fill(0).map(() => Math.random());
+await db.insertVector('documents', embedding, JSON.stringify({
+  id: 1,
+  content: 'Introduction to machine learning'
+}));
 
-// Get connection
-const conn = await pool.getConnection();
-try {
-    const result = await conn.query('SELECT * FROM users');
-    // Use result
-} finally {
-    pool.releaseConnection(conn);
-}
+// Batch insert (100× faster)
+const vectors = Array.from({ length: 1000 }, () =>
+  new Array(384).fill(0).map(() => Math.random())
+);
+const metadata = Array.from({ length: 1000 }, (_, i) => JSON.stringify({
+  id: i + 1,
+  content: `Document ${i + 1}`
+}));
+await db.batchInsertVectors('documents', vectors, metadata);
+
+// Create HNSW index
+await db.createVectorIndex('documents', 'embedding', 'hnsw', JSON.stringify({
+  m: 16,
+  ef_construction: 64,
+  distance: 'cosine'
+}));
+
+// Semantic search
+const queryVector = new Array(384).fill(0).map(() => Math.random());
+const results = await db.query(`
+  SELECT id, content, cosine_distance(embedding, $1) as similarity
+  FROM documents
+  ORDER BY similarity
+  LIMIT 10
+`, [JSON.stringify(queryVector)]);
 ```
 
-### 3. Always Use Transactions for Multiple Operations
+## 📖 Complete API Reference
+
+See the [Full TypeScript API Documentation](../../docs/api/typescript/README.md) for detailed reference:
+
+- **[Classes](../../docs/api/typescript/CLASSES.md)** - NexusDb, Transaction, PreparedStatement
+- **[Methods](../../docs/api/typescript/METHODS.md)** - Complete method reference with examples
+- **[Interfaces](../../docs/api/typescript/INTERFACES.md)** - QueryResult, Field
+- **[Examples](../../docs/api/typescript/EXAMPLES.md)** - Real-world usage patterns
+
+## 🔑 API Quick Reference
+
+### Database Operations
+
+```typescript
+const db = new NexusDb(path: string);              // Create database instance
+
+await db.query(sql, params?)                       // Execute SELECT query
+await db.execute(sql, params?)                     // Execute INSERT/UPDATE/DELETE
+await db.prepare(sql)                              // Create prepared statement
+await db.beginTransaction()                        // Start transaction
+await db.close()                                   // Close database
+```
+
+### Vector Operations
+
+```typescript
+await db.insertVector(table, vector, metadata?)              // Insert single vector
+await db.batchInsertVectors(table, vectors, metadataArray?)  // Batch insert (10-100× faster)
+await db.createVectorIndex(table, column?, type?, config?)   // Create HNSW index
+```
+
+### Transaction Methods
 
 ```typescript
 const tx = await db.beginTransaction();
+
+await tx.query(sql)                                // Query in transaction
+await tx.commit()                                  // Commit changes
+await tx.rollback()                                // Rollback changes
+```
+
+### Prepared Statement Methods
+
+```typescript
+const stmt = await db.prepare(sql);
+
+await stmt.execute(...params)                      // Execute with parameters
+await stmt.close()                                 // Close statement
+```
+
+## 🔒 Security
+
+### Parameterized Queries (SQL Injection Prevention)
+
+```typescript
+// ✅ SAFE - Parameterized query
+const userId = req.params.id;
+const result = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
+
+// ❌ UNSAFE - String concatenation (NEVER do this!)
+const result = await db.query(`SELECT * FROM users WHERE id = ${userId}`);
+```
+
+NexusQL automatically escapes all parameters to prevent SQL injection attacks.
+
+### Best Practices
+
+1. **Always use parameterized queries** for user input
+2. **Use prepared statements** for repeated queries
+3. **Validate input** before database operations
+4. **Use transactions** for multi-step operations
+5. **Handle errors gracefully** with try/catch
+
+See [Security Guide](../../SECURITY.md) for comprehensive security practices.
+
+## 💻 Platform Support
+
+| Platform | Architecture | Status |
+|----------|-------------|--------|
+| **Windows** | x64 | ✅ Supported |
+| **Windows** | arm64 | ✅ Supported |
+| **macOS** | x64 (Intel) | ✅ Supported |
+| **macOS** | arm64 (Apple Silicon) | ✅ Supported |
+| **Linux** | x64 (glibc) | ✅ Supported |
+| **Linux** | x64 (musl) | ✅ Supported |
+| **Linux** | arm64 | ✅ Supported |
+
+## 📊 Performance Tips
+
+### Use Prepared Statements for Bulk Operations
+
+```typescript
+// ❌ SLOW - Individual executes (1000 queries = ~1000ms)
+for (let i = 0; i < 1000; i++) {
+  await db.execute('INSERT INTO users VALUES ($1, $2)', [i, `User${i}`]);
+}
+
+// ✅ FAST - Prepared statement (1000 executions = ~100ms)
+const stmt = await db.prepare('INSERT INTO users VALUES ($1, $2)');
+for (let i = 0; i < 1000; i++) {
+  await stmt.execute(i, `User${i}`);
+}
+await stmt.close();
+```
+
+### Use Batch Operations for Vectors
+
+```typescript
+// ❌ SLOW - Individual inserts (1000 vectors = ~5000ms)
+for (const vector of vectors) {
+  await db.insertVector('embeddings', vector);
+}
+
+// ✅ FAST - Batch insert (1000 vectors = ~50ms)
+await db.batchInsertVectors('embeddings', vectors);
+```
+
+### Create Indexes for Better Query Performance
+
+```typescript
+// Create index on frequently queried columns
+await db.execute('CREATE INDEX idx_users_email ON users(email)');
+
+// Create vector index for similarity search (1578× speedup)
+await db.createVectorIndex('embeddings', 'embedding', 'hnsw');
+```
+
+## 🐛 Troubleshooting
+
+### Module Not Found
+
+If you get "Cannot find module" errors:
+
+```bash
+npm install @nguyenetic/nexusql
+# or
+npm rebuild @nguyenetic/nexusql
+```
+
+### Binary Compatibility
+
+If you encounter binary compatibility issues:
+
+```bash
+npm rebuild @nguyenetic/nexusql --build-from-source
+```
+
+### Windows File Locking
+
+On Windows, always close databases properly:
+
+```typescript
 try {
-    await tx.query('INSERT INTO orders (user_id, amount) VALUES (1, 100)');
-    await tx.query('UPDATE accounts SET balance = balance - 100 WHERE user_id = 1');
-    await tx.commit();
-} catch (error) {
-    await tx.rollback();
-    throw error;
+  const db = new NexusDb('./app.db');
+  // ... use database
+} finally {
+  await db.close(); // Important on Windows!
 }
 ```
 
-## Troubleshooting
+### In-Memory Databases for Testing
 
-### Connection Issues
+Use `:memory:` for tests to avoid file locking issues:
 
 ```typescript
-// Check if database is accessible
-try {
-    const result = await db.query('SELECT 1');
-    console.log('Database connected!');
-} catch (error) {
-    console.error('Cannot connect:', error);
+const db = new NexusDb(':memory:'); // No cleanup needed
+```
+
+## 📝 TypeScript Configuration
+
+Add to your `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
 }
 ```
 
-### Performance Issues
+## 🧪 Testing
 
-```typescript
-// Use EXPLAIN to analyze queries
-const plan = await db.query('EXPLAIN SELECT * FROM large_table WHERE id > 1000');
-console.log(plan.rows);
-
-// Create indexes for better performance
-await db.execute('CREATE INDEX users_email_idx ON users(email)');
+```bash
+npm test
+npm test -- --coverage
 ```
 
-## TypeScript Types
+See [examples/](examples/) for runnable test examples.
 
-Full TypeScript support with type definitions:
+## 📚 Examples
 
-```typescript
-import { NexusDB, QueryResult, Row, Transaction } from 'nexusql';
+Check out the [examples/](examples/) directory for complete, runnable examples:
 
-const db: NexusDB = new NexusDB('./mydb');
-const result: QueryResult = await db.query('SELECT * FROM users');
-const rows: Row[] = result.rows;
-```
+- **[basic-usage.js](examples/basic-usage.js)** - Getting started with NexusQL
+- **[parameterized-queries.js](examples/parameterized-queries.js)** - SQL injection prevention
+- **[transactions.js](examples/transactions.js)** - ACID transaction patterns
+- **[prepared-statements.js](examples/prepared-statements.js)** - Performance optimization
+- **[vector-search.js](examples/vector-search.js)** - Semantic search and embeddings
 
-## License
+## 🔄 Migration Guides
 
-MIT
+- [From SQLite](../../docs/guides/migration/from-sqlite.md)
+- [From PostgreSQL](../../docs/guides/migration/from-postgres.md)
+- [From sqlite-vec](../../docs/guides/migration/from-sqlite-vec.md)
 
-## Links
+## 🤝 Contributing
 
-- **GitHub**: https://github.com/johnhnguyen97/NexusQL
-- **Documentation**: See main README
-- **Issues**: https://github.com/johnhnguyen97/NexusQL/issues
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for contribution guidelines.
 
-## Support
+## 📄 License
 
-For questions or issues, please open an issue on GitHub.
+MIT License - See [LICENSE](../../LICENSE) for details.
+
+## 🔗 Links
+
+- **GitHub:** [https://github.com/Nguyenetic/NexusQL](https://github.com/Nguyenetic/NexusQL)
+- **npm:** [https://www.npmjs.com/package/@nguyenetic/nexusql](https://www.npmjs.com/package/@nguyenetic/nexusql)
+- **Documentation:** [Full API Reference](../../docs/api/typescript/README.md)
+- **Issues:** [GitHub Issues](https://github.com/Nguyenetic/NexusQL/issues)
+
+## 💡 Support
+
+- 📖 **Documentation:** [docs/](../../docs/)
+- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/Nguyenetic/NexusQL/issues)
+- 💬 **Discussions:** [GitHub Discussions](https://github.com/Nguyenetic/NexusQL/discussions)
+- 🔒 **Security:** [Security Policy](../../SECURITY.md)
+
+---
+
+**Built with ❤️ using Rust, N-API, and modern JavaScript**

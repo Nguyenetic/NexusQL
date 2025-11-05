@@ -7,6 +7,7 @@ use sled::Db;
 use std::io;
 
 /// Persistent disk storage using sled
+#[allow(dead_code)]
 pub struct DiskStorage {
     db: Option<Db>, // Optional for in-memory mode
     is_memory: bool,

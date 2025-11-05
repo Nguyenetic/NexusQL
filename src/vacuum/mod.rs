@@ -65,6 +65,7 @@ impl VisibilityMap {
 
 /// Free space map - tracks available space per page
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FreeSpaceMap {
     /// Free space available per page (in bytes)
     page_free_space: HashMap<u32, usize>,
@@ -175,7 +176,7 @@ impl TableVacuum {
     /// Execute VACUUM
     pub fn vacuum(&mut self) -> Result<VacuumStats> {
         let start = Instant::now();
-        let initial_dead_count = self.dead_tuples.len();
+        let _initial_dead_count = self.dead_tuples.len();
 
         // Remove dead tuples
         let tuples_removed = self.remove_dead_tuples();

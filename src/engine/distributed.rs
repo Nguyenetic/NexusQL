@@ -149,6 +149,7 @@ pub enum PlannerType {
 }
 
 /// Distributed query planner
+#[allow(dead_code)]
 pub struct DistributedPlanner {
     /// Table distribution metadata
     tables: HashMap<String, DistributedTable>,

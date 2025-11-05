@@ -59,6 +59,7 @@ impl Default for WALConfig {
 }
 
 /// Write-Ahead Log with Production Optimizations
+#[allow(dead_code)]
 pub struct WriteAheadLog {
     file: BufWriter<File>,
     path: String,

@@ -4,6 +4,7 @@
 use crate::types::Value;
 
 /// Batch insert builder
+#[allow(dead_code)]
 pub struct BatchInsert {
     table: String,
     columns: Vec<String>,

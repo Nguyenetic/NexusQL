@@ -10,12 +10,16 @@ use std::collections::HashMap;
 
 pub struct Executor {
     tables: HashMap<String, Table>,
+    transaction_active: bool,
+    transaction_snapshot: Option<HashMap<String, Table>>,
 }
 
 impl Executor {
     pub fn new() -> Self {
         Self {
             tables: HashMap::new(),
+            transaction_active: false,
+            transaction_snapshot: None,
         }
     }
 
@@ -143,6 +147,45 @@ impl Executor {
                         "Table {} not found",
                         from
                     )))
+                }
+            }
+            Statement::Transaction { operation } => {
+                match operation {
+                    TransactionOp::Begin => {
+                        if self.transaction_active {
+                            return Err(crate::NexusError::QueryError(
+                                "Transaction already active".into(),
+                            ));
+                        }
+                        // Create a snapshot of current tables for potential rollback
+                        self.transaction_snapshot = Some(self.tables.clone());
+                        self.transaction_active = true;
+                        Ok(ResultSet::empty())
+                    }
+                    TransactionOp::Commit => {
+                        if !self.transaction_active {
+                            return Err(crate::NexusError::QueryError(
+                                "No active transaction to commit".into(),
+                            ));
+                        }
+                        // Commit: discard snapshot and keep current state
+                        self.transaction_snapshot = None;
+                        self.transaction_active = false;
+                        Ok(ResultSet::empty())
+                    }
+                    TransactionOp::Rollback => {
+                        if !self.transaction_active {
+                            return Err(crate::NexusError::QueryError(
+                                "No active transaction to rollback".into(),
+                            ));
+                        }
+                        // Rollback: restore tables from snapshot
+                        if let Some(snapshot) = self.transaction_snapshot.take() {
+                            self.tables = snapshot;
+                        }
+                        self.transaction_active = false;
+                        Ok(ResultSet::empty())
+                    }
                 }
             }
         }

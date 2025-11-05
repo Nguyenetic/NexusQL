@@ -32,6 +32,17 @@ pub enum Statement {
         set: Vec<(String, Expr)>, // Changed from Value to Expr to support parameters
         where_clause: Option<Expr>,
     },
+    Transaction {
+        operation: TransactionOp,
+    },
+}
+
+/// Transaction operations
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransactionOp {
+    Begin,
+    Commit,
+    Rollback,
 }
 
 /// Column definition

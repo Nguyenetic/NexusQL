@@ -353,7 +353,7 @@ impl RLSManager {
 
         // Pattern: "column = $variable"
         if let Some((column, value)) = expr.split_once(" = ") {
-            let column = column.trim();
+            let _column = column.trim();
             let value = value.trim();
 
             // Find column value in row

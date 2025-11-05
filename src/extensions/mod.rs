@@ -64,7 +64,7 @@ impl ExtensionRegistry {
     }
 
     /// DROP EXTENSION
-    pub fn drop_extension(&self, name: &str, cascade: bool) -> Result<()> {
+    pub fn drop_extension(&self, name: &str, _cascade: bool) -> Result<()> {
         let mut extensions = self.extensions.write().unwrap();
 
         if !extensions.contains_key(name) {

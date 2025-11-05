@@ -10,6 +10,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+#[allow(dead_code)]
 pub struct NexusKernel {
     engines: Arc<DashMap<String, Box<dyn StorageEngine>>>,
     router: Arc<RwLock<QueryRouter>>,

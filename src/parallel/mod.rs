@@ -57,7 +57,7 @@ pub enum ParallelNode {
     ParallelSeqScan {
         table: String,
         worker_id: usize,
-        total_workers: usize,
+        _total_workers: usize,
     },
     /// Regular (non-parallel) node
     Regular(PlanNode),
@@ -131,13 +131,11 @@ impl ParallelExecutor {
                     child: Box::new(ParallelNode::ParallelSeqScan {
                         table,
                         worker_id: 0, // Placeholder, actual workers created at execution
-                        total_workers: workers,
+                        _total_workers: workers,
                     }),
                 }
             }
-            PlanNode::Aggregate {
-                input,  ..
-            } => {
+            PlanNode::Aggregate { input, .. } => {
                 // Parallel aggregation requires gather
                 let parallel_input = self.create_parallel_plan(*input);
                 ParallelNode::Gather {
@@ -180,8 +178,8 @@ impl ParallelExecutor {
             ParallelNode::ParallelSeqScan {
                 table,
                 worker_id,
-                total_workers,
-            } => self.execute_parallel_scan(&table, worker_id, total_workers),
+                _total_workers,
+            } => self.execute_parallel_scan(&table, worker_id, _total_workers),
             ParallelNode::Regular(_plan) => {
                 // Execute regular plan (non-parallel)
                 ResultSet::new(vec![])
@@ -243,7 +241,7 @@ impl ParallelExecutor {
         &self,
         _table: &str,
         worker_id: usize,
-        total_workers: usize,
+        _total_workers: usize,
     ) -> ResultSet {
         // In real implementation, each worker scans a partition of the table
         // Worker 0: rows 0, 3, 6, 9, ...
@@ -262,12 +260,12 @@ impl ParallelExecutor {
         match plan {
             ParallelNode::ParallelSeqScan {
                 table,
-                total_workers,
+                _total_workers,
                 ..
             } => ParallelNode::ParallelSeqScan {
                 table,
                 worker_id,
-                total_workers,
+                _total_workers,
             },
             other => other,
         }
@@ -462,7 +460,7 @@ mod tests {
         let child = ParallelNode::ParallelSeqScan {
             table: "users".to_string(),
             worker_id: 0,
-            total_workers: 2,
+            _total_workers: 2,
         };
 
         let result = executor.execute_gather(2, child);

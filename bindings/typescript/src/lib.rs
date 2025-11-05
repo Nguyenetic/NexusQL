@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 #[napi]
 pub struct NexusDB {
     db: Arc<Mutex<NexusSQL>>,
-    runtime: Arc<tokio::runtime::Runtime>,
+    _runtime: Arc<tokio::runtime::Runtime>,
 }
 
 #[napi]
@@ -27,7 +27,7 @@ impl NexusDB {
 
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
-            runtime: Arc::new(runtime),
+            _runtime: Arc::new(runtime),
         })
     }
 
@@ -81,16 +81,48 @@ impl NexusDB {
         Ok(convert_result(result))
     }
 
-    /// Execute a query without parameters (backward compatible)
+    /// Execute a query with optional parameters
+    ///
+    /// # Arguments
+    /// * `sql` - SQL query with optional $1, $2, etc. placeholders
+    /// * `params` - Optional array of parameter values
+    ///
+    /// # Example
+    /// ```javascript
+    /// // Without parameters
+    /// const result = await db.query('SELECT * FROM users');
+    ///
+    /// // With parameters
+    /// const result = await db.query('SELECT * FROM users WHERE id = $1', [1]);
+    /// ```
     #[napi]
-    pub async fn query(&self, sql: String) -> Result<QueryResult> {
-        self.query_with_params(sql, None).await
+    pub async fn query(
+        &self,
+        sql: String,
+        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
+            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        >,
+    ) -> Result<QueryResult> {
+        self.query_with_params(sql, params).await
     }
 
-    /// Execute a statement with optional parameters (prevents SQL injection)
+    /// Execute a statement with optional parameters
     /// Returns the number of affected rows
+    ///
+    /// # Arguments
+    /// * `sql` - SQL statement with optional $1, $2, etc. placeholders
+    /// * `params` - Optional array of parameter values
+    ///
+    /// # Example
+    /// ```javascript
+    /// // Without parameters
+    /// await db.execute('CREATE TABLE users (id INT, name TEXT)');
+    ///
+    /// // With parameters
+    /// await db.execute('INSERT INTO users VALUES ($1, $2)', [1, 'Alice']);
+    /// ```
     #[napi]
-    pub async fn execute_with_params(
+    pub async fn execute(
         &self,
         sql: String,
         #[napi(ts_arg_type = "any[] | undefined")] params: Option<
@@ -101,10 +133,16 @@ impl NexusDB {
         Ok(result.row_count)
     }
 
-    /// Execute a statement without parameters (backward compatible)
+    /// Execute a statement with optional parameters (alias for backward compatibility)
     #[napi]
-    pub async fn execute(&self, sql: String) -> Result<u32> {
-        self.execute_with_params(sql, None).await
+    pub async fn execute_with_params(
+        &self,
+        sql: String,
+        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
+            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        >,
+    ) -> Result<u32> {
+        self.execute(sql, params).await
     }
 
     /// Create a prepared statement for executing the same query multiple times with different parameters
@@ -230,7 +268,7 @@ impl NexusDB {
             values.join(", ")
         );
 
-        self.execute(sql).await?;
+        self.execute(sql, None).await?;
         Ok(())
     }
 
@@ -250,14 +288,13 @@ impl NexusDB {
     /// const results = await db.vectorSearch('embeddings', [0.1, 0.2, 0.3], 10, 'cosine');
     /// console.log(results[0].distance, results[0].text);
     /// ```
-    #[napi]
     pub async fn vector_search(
         &self,
         table: String,
         query_vector: Vec<f64>,
         limit: u32,
         distance_metric: Option<String>,
-    ) -> Result<String> {
+    ) -> Result<serde_json::Value> {
         let metric = distance_metric.unwrap_or_else(|| "l2".to_string());
 
         let distance_fn = match metric.to_lowercase().as_str() {
@@ -281,9 +318,9 @@ impl NexusDB {
             distance_fn, vector_str, table, limit
         );
 
-        let result = self.query(sql).await?;
+        let result = self.query(sql, None).await?;
 
-        // Return the JSON string (rows is already a JSON string)
+        // Return rows (auto-converted to JS by serde-json feature)
         Ok(result.rows)
     }
 
@@ -429,7 +466,7 @@ impl NexusDB {
             values_clauses.join(", ")
         );
 
-        self.execute(sql).await
+        self.execute(sql, None).await
     }
 }
 
@@ -553,10 +590,10 @@ impl PreparedStatement {
     }
 }
 
-/// Query result structure
+/// Query result with auto-parsed rows (serde-json feature handles conversion)
 #[napi(object)]
 pub struct QueryResult {
-    pub rows: String, // JSON string that will be parsed in JavaScript
+    pub rows: serde_json::Value, // Auto-converted to JS objects/arrays
     pub row_count: u32,
     pub fields: Vec<Field>,
 }
@@ -606,12 +643,12 @@ fn convert_result(result: NexusResultSet) -> QueryResult {
         vec![]
     };
 
-    // Convert rows to JSON objects
+    // Convert rows to JSON Value (serde-json feature auto-converts to JS)
     let row_objects: Vec<serde_json::Value> =
         result.rows.iter().map(|row| convert_row(row)).collect();
 
     QueryResult {
-        rows: serde_json::to_string(&row_objects).unwrap_or_else(|_| "[]".to_string()),
+        rows: serde_json::Value::Array(row_objects),
         row_count: result.rows_affected as u32,
         fields,
     }
@@ -684,52 +721,4 @@ fn base64_encode(data: &[u8]) -> String {
     }
 
     result
-}
-
-/// Convert JSON value to NexusValue for parameterized queries
-fn json_value_to_nexus_value(value: &serde_json::Value) -> NexusValue {
-    match value {
-        serde_json::Value::Null => NexusValue::Null,
-        serde_json::Value::Bool(b) => NexusValue::Boolean(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                NexusValue::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                NexusValue::Float(ordered_float::OrderedFloat(f))
-            } else {
-                NexusValue::Null
-            }
-        }
-        serde_json::Value::String(s) => {
-            // Check if this is a vector literal [1.0, 2.0, ...]
-            if s.starts_with('[') && s.ends_with(']') {
-                // Try to parse as vector
-                let nums: Vec<f32> = s[1..s.len() - 1]
-                    .split(',')
-                    .filter_map(|n| n.trim().parse::<f32>().ok())
-                    .collect();
-                if !nums.is_empty() {
-                    return NexusValue::Vector(nums);
-                }
-            }
-            NexusValue::Text(s.clone())
-        }
-        serde_json::Value::Array(arr) => {
-            // Try to convert to vector if all elements are numbers
-            let nums: Vec<f32> = arr
-                .iter()
-                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                .collect();
-            if nums.len() == arr.len() {
-                NexusValue::Vector(nums)
-            } else {
-                // Can't convert - treat as text
-                NexusValue::Text(serde_json::to_string(arr).unwrap_or_default())
-            }
-        }
-        serde_json::Value::Object(_) => {
-            // Convert object to JSON string
-            NexusValue::Text(serde_json::to_string(value).unwrap_or_default())
-        }
-    }
 }

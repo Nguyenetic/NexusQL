@@ -34,6 +34,7 @@ pub struct Shard {
 }
 
 /// Sharding manager
+#[allow(dead_code)]
 pub struct ShardingManager {
     strategy: ShardStrategy,
     shards: Arc<RwLock<Vec<Shard>>>,
@@ -252,13 +253,13 @@ impl DistributedQueryCoordinator {
     }
 
     /// Execute distributed query across shards
-    pub fn execute_distributed(&self, query: &str, shard_keys: Vec<Value>) -> Result<Vec<Row>> {
+    pub fn execute_distributed(&self, _query: &str, shard_keys: Vec<Value>) -> Result<Vec<Row>> {
         let all_results = Vec::new();
 
         // Route to appropriate shards
-        let target_shards: Vec<usize> = shard_keys
+        let _target_shards: Vec<usize> = shard_keys
             .iter()
-            .filter_map(|key| {
+            .filter_map(|_key| {
                 // Simplified routing based on key
                 Some(0) // Would route to actual shard
             })
@@ -271,7 +272,7 @@ impl DistributedQueryCoordinator {
     }
 
     /// Scatter-gather pattern
-    pub fn scatter_gather(&self, query: &str) -> Result<QueryStats> {
+    pub fn scatter_gather(&self, _query: &str) -> Result<QueryStats> {
         let shard_count = self.sharding_manager.shard_count();
 
         // Scatter: Send query to all shards

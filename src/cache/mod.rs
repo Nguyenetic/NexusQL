@@ -335,7 +335,7 @@ impl SmartQueryCache {
     pub fn invalidate_table(&mut self, table: &str) {
         if let Some(keys) = self.table_queries.remove(table) {
             for key in keys {
-                if let Some(entry) = self.cache.cache.remove(&key) {
+                if let Some(_entry) = self.cache.cache.remove(&key) {
                     self.cache.lru_queue.retain(|&k| k != key);
                     // Also remove from other table mappings
                     for queries in self.table_queries.values_mut() {

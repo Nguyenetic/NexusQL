@@ -186,7 +186,7 @@ impl MaterializedView {
     }
 
     /// Apply delta for join views
-    fn apply_delta_join(&mut self, delta: Delta) -> Result<()> {
+    fn apply_delta_join(&mut self, _delta: Delta) -> Result<()> {
         // Join incremental maintenance is complex
         // pg_ivm uses a technique called "delta tables"
         // For simplicity, we mark the view as needing refresh
@@ -227,7 +227,7 @@ impl MaterializedView {
     }
 
     /// Get a read lock on the data
-    pub fn read_data(&self) -> std::sync::RwLockReadGuard<ResultSet> {
+    pub fn read_data(&self) -> std::sync::RwLockReadGuard<'_, ResultSet> {
         self.data.read().unwrap()
     }
 

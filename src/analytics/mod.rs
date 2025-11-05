@@ -66,7 +66,7 @@ impl TimeSeriesOptimizer {
     }
 
     /// Continuous aggregates (materialized time-series views)
-    pub fn create_continuous_aggregate(rows: &[Row], window: TimeWindow) -> ContinuousAggregate {
+    pub fn create_continuous_aggregate(_rows: &[Row], window: TimeWindow) -> ContinuousAggregate {
         ContinuousAggregate::new(window)
     }
 

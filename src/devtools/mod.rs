@@ -160,7 +160,7 @@ impl DataPortability {
     /// Import from CSV
     pub fn import_from_csv(path: &Path) -> Result<Vec<Row>> {
         let file = File::open(path).map_err(|e| NexusError::IoError(e))?;
-        let reader = BufReader::new(file);
+        let _reader = BufReader::new(file);
 
         // In production: parse CSV properly
         // For now, return empty
@@ -186,7 +186,7 @@ impl DataPortability {
     }
 
     /// Import from JSON
-    pub fn import_from_json(json: &str) -> Result<Vec<Row>> {
+    pub fn import_from_json(_json: &str) -> Result<Vec<Row>> {
         // In production: parse JSON properly with serde_json
         Ok(Vec::new())
     }

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Document with ColBERT embeddings
+#[allow(dead_code)]
 struct Document {
     id: usize,
     text: String,

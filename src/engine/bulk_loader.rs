@@ -5,6 +5,7 @@ use crate::types::{Row, Value};
 use crate::storage::Table;
 use crate::Result;
 
+#[allow(dead_code)]
 pub struct BulkLoader {
     /// Disable WAL during bulk load (RocksDB practice)
     wal_disabled: bool,

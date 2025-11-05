@@ -15,6 +15,7 @@ use crate::types::Value;
 /// - Pre-allocated String buffer with capacity
 /// - Reusable write buffer to avoid allocations
 /// - Direct memory writes instead of string concatenation
+#[allow(dead_code)]
 pub struct FastBatchInsert {
     table: String,
     rows: Vec<Vec<Value>>,

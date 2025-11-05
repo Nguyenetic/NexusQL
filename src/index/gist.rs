@@ -70,6 +70,7 @@ struct GiSTEntry {
 
 /// Pointer to either a child node or a row
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum GiSTPointer {
     /// Pointer to child node
     Node(Box<GiSTNode>),

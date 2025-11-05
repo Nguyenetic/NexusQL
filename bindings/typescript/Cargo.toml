@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # N-API bindings for Rust ↔ Node.js
-napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt"] }
+napi = { version = "2", default-features = false, features = ["napi8", "async", "tokio_rt", "serde-json"] }
 napi-derive = "2"
 
 # NexusQL core (link to parent crate)
