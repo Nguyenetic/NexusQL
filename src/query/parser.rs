@@ -444,10 +444,8 @@ impl QueryParser {
                     }
                 }
                 sql_ast::Value::SingleQuotedString(s) | sql_ast::Value::DoubleQuotedString(s) => {
-                    // Check if this is a vector literal like '[0.1, 0.2, 0.3]'
-                    if s.starts_with('[') && s.ends_with(']') {
-                        return self.parse_vector_literal(s);
-                    }
+                    // Don't auto-convert bracket strings to vectors - respect column type
+                    // Users should use ARRAY[...] syntax for vectors or vector columns
                     Ok(Value::Text(s.clone()))
                 }
                 sql_ast::Value::Boolean(b) => Ok(Value::Boolean(*b)),
