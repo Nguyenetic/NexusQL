@@ -320,7 +320,8 @@ mod tests {
             right: Box::new(Expr::Literal(Value::Integer(25))),
         };
 
-        assert!(evaluate_where(&row, &expr));
+        let params = QueryParams::default();
+        assert!(evaluate_where(&row, &expr, &params));
     }
 
     #[test]
@@ -333,6 +334,7 @@ mod tests {
             right: Box::new(Expr::Literal(Value::Integer(18))),
         };
 
-        assert!(evaluate_where(&row, &expr));
+        let params = QueryParams::default();
+        assert!(evaluate_where(&row, &expr, &params));
     }
 }
