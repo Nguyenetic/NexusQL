@@ -175,15 +175,49 @@ impl NexusSQL {
         self.kernel.list_engines()
     }
 
-    pub async fn execute(&self, sql: &str) -> Result<ResultSet> {
+    /// Execute SQL with optional parameters
+    ///
+    /// # Arguments
+    /// * `sql` - SQL statement with optional parameter placeholders ($1, $2, etc.)
+    /// * `params` - Optional vector of parameter values (positional, 1-indexed)
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use nexusql::{NexusSQL, Value};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let db = NexusSQL::new("./mydb").await?;
+    ///
+    /// // Without parameters
+    /// db.execute_with_params("CREATE TABLE users (id INT, name TEXT)", None).await?;
+    ///
+    /// // With positional parameters
+    /// db.execute_with_params(
+    ///     "INSERT INTO users VALUES ($1, $2)",
+    ///     Some(vec![Value::Integer(1), Value::Text("Alice".to_string())])
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_with_params(
+        &self,
+        sql: &str,
+        params: Option<Vec<Value>>,
+    ) -> Result<ResultSet> {
         let statement = QueryParser::parse(sql)?;
 
         // Optimize query
         let optimizer = Optimizer::new();
         let _optimized = optimizer.optimize(statement)?;
 
-        // Execute optimized query
-        self.kernel.execute(sql).await
+        // Execute with parameters
+        self.kernel
+            .execute_with_params(sql, params.unwrap_or_default())
+            .await
+    }
+
+    /// Execute SQL without parameters (backward compatible)
+    pub async fn execute(&self, sql: &str) -> Result<ResultSet> {
+        self.execute_with_params(sql, None).await
     }
 
     pub async fn shutdown(self) -> Result<()> {

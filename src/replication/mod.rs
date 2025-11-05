@@ -371,6 +371,7 @@ impl DatabaseMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{ResultSet, Row, Value};
 
     #[test]
     fn test_create_replication_slot() {

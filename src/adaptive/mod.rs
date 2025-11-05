@@ -364,7 +364,9 @@ impl AdaptiveExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::advanced_optimizer::PlanCost;
     use crate::engine::ScanMethod;
+    use crate::types::{ResultSet, Row, Value};
 
     #[test]
     fn test_adaptive_executor_initialization() {

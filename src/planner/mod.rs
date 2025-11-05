@@ -342,6 +342,8 @@ impl QueryPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{ResultSet, Row, Value};
+    use std::time::Instant;
 
     fn create_test_data() -> Vec<Row> {
         (1..=1000)

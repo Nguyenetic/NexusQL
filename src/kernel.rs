@@ -53,10 +53,14 @@ impl NexusKernel {
         self.engines.iter().map(|e| e.key().clone()).collect()
     }
 
-    pub async fn execute(&self, sql: &str) -> Result<ResultSet> {
+    pub async fn execute_with_params(
+        &self,
+        sql: &str,
+        params: Vec<crate::types::Value>,
+    ) -> Result<ResultSet> {
         let query = Query {
             sql: sql.to_string(),
-            params: vec![],
+            params,
         };
 
         // Check for engine hint in SQL comment
@@ -85,6 +89,10 @@ impl NexusKernel {
         router.record_performance(&engine_name, latency);
 
         Ok(result)
+    }
+
+    pub async fn execute(&self, sql: &str) -> Result<ResultSet> {
+        self.execute_with_params(sql, vec![]).await
     }
 
     pub async fn shutdown(&self) -> Result<()> {

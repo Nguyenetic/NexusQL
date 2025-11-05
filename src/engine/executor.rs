@@ -2,7 +2,7 @@
 //! PROPRIETARY
 
 use crate::query::ast::*;
-use crate::query::evaluator::{evaluate_expr, evaluate_where};
+use crate::query::evaluator::{evaluate_expr, evaluate_where, QueryParams};
 use crate::storage::Table;
 use crate::types::{ResultSet, Row, Value};
 use crate::Result;
@@ -19,7 +19,7 @@ impl Executor {
         }
     }
 
-    pub fn execute(&mut self, statement: &Statement) -> Result<ResultSet> {
+    pub fn execute(&mut self, statement: &Statement, params: &QueryParams) -> Result<ResultSet> {
         match statement {
             Statement::CreateTable { name, columns } => {
                 let col_names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
@@ -33,8 +33,16 @@ impl Executor {
                 values,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
-                    for value_set in values {
-                        let row = Row::new(t.columns.clone(), value_set.clone());
+                    for expr_set in values {
+                        // Evaluate each expression with the provided parameters
+                        // Use an empty row since we're not referencing columns in INSERT VALUES
+                        let empty_row = Row::new(vec![], vec![]);
+                        let evaluated_values: Vec<Value> = expr_set
+                            .iter()
+                            .map(|expr| evaluate_expr(&empty_row, expr, params))
+                            .collect();
+
+                        let row = Row::new(t.columns.clone(), evaluated_values);
                         t.insert(row);
                     }
                     Ok(ResultSet::empty())
@@ -61,15 +69,15 @@ impl Executor {
 
                 // Apply WHERE clause filter
                 if let Some(expr) = where_clause {
-                    rows.retain(|row| evaluate_where(row, expr));
+                    rows.retain(|row| evaluate_where(row, expr, params));
                 }
 
                 // Apply ORDER BY sorting (especially for vector distance)
                 if let Some(order) = order_by {
                     rows.sort_by(|a, b| {
                         use crate::query::evaluator::evaluate_expr;
-                        let a_val = evaluate_expr(a, &order.expr);
-                        let b_val = evaluate_expr(b, &order.expr);
+                        let a_val = evaluate_expr(a, &order.expr, params);
+                        let b_val = evaluate_expr(b, &order.expr, params);
 
                         let cmp = a_val
                             .partial_cmp(&b_val)
@@ -89,7 +97,7 @@ impl Executor {
                 }
 
                 // Project columns based on SELECT list
-                let result_rows = self.project_columns(&rows, columns)?;
+                let result_rows = self.project_columns(&rows, columns, params)?;
 
                 Ok(ResultSet::new(result_rows))
             }
@@ -102,13 +110,14 @@ impl Executor {
                     for row in &mut t.rows {
                         let should_update = where_clause
                             .as_ref()
-                            .map(|expr| evaluate_where(row, expr))
+                            .map(|expr| evaluate_where(row, expr, params))
                             .unwrap_or(true);
 
                         if should_update {
-                            for (col_name, new_value) in set {
+                            for (col_name, new_expr) in set {
                                 if let Some(idx) = row.columns.iter().position(|c| c == col_name) {
-                                    row.values[idx] = new_value.clone();
+                                    // Evaluate the expression with parameters
+                                    row.values[idx] = evaluate_expr(row, new_expr, params);
                                 }
                             }
                         }
@@ -124,7 +133,7 @@ impl Executor {
             Statement::Delete { from, where_clause } => {
                 if let Some(t) = self.tables.get_mut(from) {
                     if let Some(expr) = where_clause {
-                        t.rows.retain(|row| !evaluate_where(row, expr));
+                        t.rows.retain(|row| !evaluate_where(row, expr, params));
                     } else {
                         t.rows.clear();
                     }
@@ -148,7 +157,12 @@ impl Executor {
     }
 
     /// Project columns from rows based on SELECT list items
-    fn project_columns(&self, rows: &[Row], select_items: &[SelectItem]) -> Result<Vec<Row>> {
+    fn project_columns(
+        &self,
+        rows: &[Row],
+        select_items: &[SelectItem],
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
         let mut result_rows = Vec::with_capacity(rows.len());
 
         for row in rows {
@@ -164,7 +178,7 @@ impl Executor {
                     }
                     SelectItem::Expr { expr, alias } => {
                         // Evaluate the expression
-                        let value = evaluate_expr(row, expr);
+                        let value = evaluate_expr(row, expr, params);
 
                         // Determine column name (use alias if provided, otherwise expression string)
                         let col_name = if let Some(alias_name) = alias {

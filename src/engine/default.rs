@@ -2,6 +2,7 @@
 //! PROPRIETARY
 
 use crate::engine::{EngineCapabilities, Executor, Query, QueryCost, StorageEngine};
+use crate::query::evaluator::QueryParams;
 use crate::query::QueryParser;
 use crate::storage::disk::DiskStorage;
 use crate::types::ResultSet;
@@ -57,8 +58,11 @@ impl StorageEngine for DefaultEngine {
     async fn execute(&self, query: &Query) -> Result<ResultSet> {
         let statement = QueryParser::parse(&query.sql)?;
 
+        // Convert Vec<Value> params from query to QueryParams
+        let params = QueryParams::with_positional(query.params.clone());
+
         let mut executor = self.executor.write().await;
-        let result = executor.execute(&statement)?;
+        let result = executor.execute(&statement, &params)?;
 
         // Skip disk writes for in-memory mode
         if !self.is_memory {

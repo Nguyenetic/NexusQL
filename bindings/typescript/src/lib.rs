@@ -3,6 +3,7 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use nexusql::{NexusSQL, ResultSet as NexusResultSet, Row as NexusRow, Value as NexusValue};
+use ordered_float::OrderedFloat;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -30,24 +31,80 @@ impl NexusDB {
         })
     }
 
+    /// Execute a query with optional parameters (prevents SQL injection)
+    ///
+    /// # Arguments
+    /// * `sql` - SQL statement with $1, $2, etc. placeholders
+    /// * `params` - Optional array of parameter values
+    ///
+    /// # Example
+    /// ```javascript
+    /// const result = await db.queryWithParams(
+    ///   'SELECT * FROM users WHERE id = $1 AND status = $2',
+    ///   [123, 'active']
+    /// );
+    /// ```
     #[napi]
-    pub async fn query(&self, sql: String) -> Result<QueryResult> {
+    pub async fn query_with_params(
+        &self,
+        sql: String,
+        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
+            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        >,
+    ) -> Result<QueryResult> {
         let db = self.db.clone();
+
+        // Convert parameters to NexusValue
+        let nexus_params = if let Some(params_vec) = params {
+            params_vec
+                .into_iter()
+                .map(|p| match p {
+                    napi::Either::A(s) => NexusValue::Text(s),
+                    napi::Either::B(napi::Either::A(i)) => NexusValue::Integer(i),
+                    napi::Either::B(napi::Either::B(napi::Either::A(f))) => {
+                        NexusValue::Float(OrderedFloat(f))
+                    }
+                    napi::Either::B(napi::Either::B(napi::Either::B(b))) => NexusValue::Boolean(b),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let result = db
             .lock()
             .await
-            .execute(&sql)
+            .execute_with_params(&sql, Some(nexus_params))
             .await
             .map_err(|e| Error::from_reason(format!("Query failed: {}", e)))?;
 
         Ok(convert_result(result))
     }
 
+    /// Execute a query without parameters (backward compatible)
+    #[napi]
+    pub async fn query(&self, sql: String) -> Result<QueryResult> {
+        self.query_with_params(sql, None).await
+    }
+
+    /// Execute a statement with optional parameters (prevents SQL injection)
+    /// Returns the number of affected rows
+    #[napi]
+    pub async fn execute_with_params(
+        &self,
+        sql: String,
+        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
+            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        >,
+    ) -> Result<u32> {
+        let result = self.query_with_params(sql, params).await?;
+        Ok(result.row_count)
+    }
+
+    /// Execute a statement without parameters (backward compatible)
     #[napi]
     pub async fn execute(&self, sql: String) -> Result<u32> {
-        let result = self.query(sql).await?;
-        Ok(result.row_count)
+        self.execute_with_params(sql, None).await
     }
 
     #[napi]
@@ -203,8 +260,8 @@ impl NexusDB {
 
         let result = self.query(sql).await?;
 
-        // Return the JSON string directly
-        Ok(result.rows())
+        // Return the JSON string (rows is already a JSON string)
+        Ok(result.rows)
     }
 
     /// Create a vector index for fast similarity search
@@ -414,30 +471,11 @@ impl Transaction {
 }
 
 /// Query result structure
-#[napi]
+#[napi(object)]
 pub struct QueryResult {
-    rows: Vec<serde_json::Value>,
-    row_count: u32,
-    fields: Vec<Field>,
-}
-
-#[napi]
-impl QueryResult {
-    #[napi(getter)]
-    pub fn rows(&self) -> String {
-        // Return as JSON string for now - JavaScript can parse it
-        serde_json::to_string(&self.rows).unwrap_or_else(|_| "[]".to_string())
-    }
-
-    #[napi(getter)]
-    pub fn row_count(&self) -> u32 {
-        self.row_count
-    }
-
-    #[napi(getter)]
-    pub fn fields(&self) -> Vec<Field> {
-        self.fields.clone()
-    }
+    pub rows: String, // JSON string that will be parsed in JavaScript
+    pub row_count: u32,
+    pub fields: Vec<Field>,
 }
 
 /// Field metadata
@@ -485,8 +523,12 @@ fn convert_result(result: NexusResultSet) -> QueryResult {
         vec![]
     };
 
+    // Convert rows to JSON objects
+    let row_objects: Vec<serde_json::Value> =
+        result.rows.iter().map(|row| convert_row(row)).collect();
+
     QueryResult {
-        rows: result.rows.iter().map(|row| convert_row(row)).collect(),
+        rows: serde_json::to_string(&row_objects).unwrap_or_else(|_| "[]".to_string()),
         row_count: result.rows_affected as u32,
         fields,
     }
@@ -559,4 +601,52 @@ fn base64_encode(data: &[u8]) -> String {
     }
 
     result
+}
+
+/// Convert JSON value to NexusValue for parameterized queries
+fn json_value_to_nexus_value(value: &serde_json::Value) -> NexusValue {
+    match value {
+        serde_json::Value::Null => NexusValue::Null,
+        serde_json::Value::Bool(b) => NexusValue::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                NexusValue::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                NexusValue::Float(ordered_float::OrderedFloat(f))
+            } else {
+                NexusValue::Null
+            }
+        }
+        serde_json::Value::String(s) => {
+            // Check if this is a vector literal [1.0, 2.0, ...]
+            if s.starts_with('[') && s.ends_with(']') {
+                // Try to parse as vector
+                let nums: Vec<f32> = s[1..s.len() - 1]
+                    .split(',')
+                    .filter_map(|n| n.trim().parse::<f32>().ok())
+                    .collect();
+                if !nums.is_empty() {
+                    return NexusValue::Vector(nums);
+                }
+            }
+            NexusValue::Text(s.clone())
+        }
+        serde_json::Value::Array(arr) => {
+            // Try to convert to vector if all elements are numbers
+            let nums: Vec<f32> = arr
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+            if nums.len() == arr.len() {
+                NexusValue::Vector(nums)
+            } else {
+                // Can't convert - treat as text
+                NexusValue::Text(serde_json::to_string(arr).unwrap_or_default())
+            }
+        }
+        serde_json::Value::Object(_) => {
+            // Convert object to JSON string
+            NexusValue::Text(serde_json::to_string(value).unwrap_or_default())
+        }
+    }
 }

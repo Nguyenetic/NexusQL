@@ -310,8 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { NexusDb, Transaction, QueryResult } = nativeBinding
+const { NexusDb, Transaction } = nativeBinding
 
 module.exports.NexusDb = NexusDb
 module.exports.Transaction = Transaction
-module.exports.QueryResult = QueryResult

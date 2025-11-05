@@ -195,6 +195,8 @@ impl DataPortability {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::security::{PasswordPolicy, SqlInjectionPrevention};
+    use crate::types::{ResultSet, Row, Value};
     use tempfile::tempdir;
 
     #[test]

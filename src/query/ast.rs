@@ -13,7 +13,7 @@ pub enum Statement {
     Insert {
         table: String,
         columns: Option<Vec<String>>,
-        values: Vec<Vec<Value>>,
+        values: Vec<Vec<Expr>>, // Changed from Value to Expr to support parameters
     },
     Select {
         columns: Vec<SelectItem>, // Items to select (columns, expressions, *)
@@ -29,7 +29,7 @@ pub enum Statement {
     },
     Update {
         table: String,
-        set: Vec<(String, Value)>,
+        set: Vec<(String, Expr)>, // Changed from Value to Expr to support parameters
         where_clause: Option<Expr>,
     },
 }
@@ -78,6 +78,9 @@ pub enum Expr {
     /// Literal value
     Literal(Value),
 
+    /// Parameter placeholder (? for positional, :name for named)
+    Parameter(Parameter),
+
     /// Binary operation (>, <, =, AND, OR, etc.)
     BinaryOp {
         left: Box<Expr>,
@@ -87,6 +90,17 @@ pub enum Expr {
 
     /// Function call (e.g., SEMANTIC_SEARCH(...))
     Function { name: String, args: Vec<Expr> },
+}
+
+/// Parameter placeholder
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Parameter {
+    /// Positional parameter (?)
+    /// Index is 1-based to match SQL conventions
+    Positional(usize),
+
+    /// Named parameter (:name)
+    Named(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

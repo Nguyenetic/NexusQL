@@ -305,6 +305,8 @@ pub fn is_auto_updateable(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planner::PlanCost;
+    use crate::types::{ResultSet, Row, Value};
 
     #[test]
     fn test_view_creation() {

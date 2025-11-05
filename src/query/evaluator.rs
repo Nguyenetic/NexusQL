@@ -1,12 +1,55 @@
 //! WHERE Clause Expression Evaluator
 //! PROPRIETARY
 
-use crate::query::ast::{BinaryOperator, Expr};
+use crate::query::ast::{BinaryOperator, Expr, Parameter};
 use crate::types::{Row, Value};
+use std::collections::HashMap;
+
+/// Parameter values for query execution
+#[derive(Debug, Clone, Default)]
+pub struct QueryParams {
+    /// Positional parameters (1-indexed)
+    pub positional: Vec<Value>,
+    /// Named parameters
+    pub named: HashMap<String, Value>,
+}
+
+impl QueryParams {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_positional(params: Vec<Value>) -> Self {
+        Self {
+            positional: params,
+            named: HashMap::new(),
+        }
+    }
+
+    pub fn with_named(params: HashMap<String, Value>) -> Self {
+        Self {
+            positional: Vec::new(),
+            named: params,
+        }
+    }
+
+    pub fn get_positional(&self, index: usize) -> Option<&Value> {
+        // Convert from 1-based to 0-based index
+        if index > 0 && index <= self.positional.len() {
+            self.positional.get(index - 1)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_named(&self, name: &str) -> Option<&Value> {
+        self.named.get(name)
+    }
+}
 
 /// Evaluate WHERE clause expression against a row
-pub fn evaluate_where(row: &Row, expr: &Expr) -> bool {
-    match evaluate_expr(row, expr) {
+pub fn evaluate_where(row: &Row, expr: &Expr, params: &QueryParams) -> bool {
+    match evaluate_expr(row, expr, params) {
         Value::Boolean(b) => b,
         Value::Integer(i) => i != 0,
         Value::Null => false,
@@ -15,19 +58,27 @@ pub fn evaluate_where(row: &Row, expr: &Expr) -> bool {
 }
 
 /// Evaluate any expression
-pub fn evaluate_expr(row: &Row, expr: &Expr) -> Value {
+pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
     match expr {
         Expr::Column(col_name) => row.get(col_name).cloned().unwrap_or(Value::Null),
 
         Expr::Literal(val) => val.clone(),
 
+        Expr::Parameter(param) => match param {
+            Parameter::Positional(index) => params
+                .get_positional(*index)
+                .cloned()
+                .unwrap_or(Value::Null),
+            Parameter::Named(name) => params.get_named(name).cloned().unwrap_or(Value::Null),
+        },
+
         Expr::BinaryOp { left, op, right } => {
-            let left_val = evaluate_expr(row, left);
-            let right_val = evaluate_expr(row, right);
+            let left_val = evaluate_expr(row, left, params);
+            let right_val = evaluate_expr(row, right, params);
             evaluate_binary_op(&left_val, op, &right_val)
         }
 
-        Expr::Function { name, args } => evaluate_function(row, name, args),
+        Expr::Function { name, args } => evaluate_function(row, name, args, params),
     }
 }
 
@@ -140,7 +191,7 @@ fn to_bool(val: &Value) -> bool {
 }
 
 /// Evaluate function calls (built-in functions)
-fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
+fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams) -> Value {
     let name_upper = name.to_uppercase();
 
     match name_upper.as_str() {
@@ -149,8 +200,8 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 2 {
                 return Value::Null;
             }
-            let arg1 = evaluate_expr(row, &args[0]);
-            let arg2 = evaluate_expr(row, &args[1]);
+            let arg1 = evaluate_expr(row, &args[0], params);
+            let arg2 = evaluate_expr(row, &args[1], params);
 
             if let Some(distance) = arg1.l2_distance(&arg2) {
                 Value::Float(ordered_float::OrderedFloat(distance as f64))
@@ -163,8 +214,8 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 2 {
                 return Value::Null;
             }
-            let arg1 = evaluate_expr(row, &args[0]);
-            let arg2 = evaluate_expr(row, &args[1]);
+            let arg1 = evaluate_expr(row, &args[0], params);
+            let arg2 = evaluate_expr(row, &args[1], params);
 
             if let Some(distance) = arg1.cosine_distance(&arg2) {
                 Value::Float(ordered_float::OrderedFloat(distance as f64))
@@ -177,8 +228,8 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 2 {
                 return Value::Null;
             }
-            let arg1 = evaluate_expr(row, &args[0]);
-            let arg2 = evaluate_expr(row, &args[1]);
+            let arg1 = evaluate_expr(row, &args[0], params);
+            let arg2 = evaluate_expr(row, &args[1], params);
 
             if let Some(distance) = arg1.inner_product(&arg2) {
                 Value::Float(ordered_float::OrderedFloat(distance as f64))
@@ -192,7 +243,7 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 1 {
                 return Value::Null;
             }
-            let arg = evaluate_expr(row, &args[0]);
+            let arg = evaluate_expr(row, &args[0], params);
             if let Value::Text(s) = arg {
                 Value::Text(s.to_uppercase())
             } else {
@@ -204,7 +255,7 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 1 {
                 return Value::Null;
             }
-            let arg = evaluate_expr(row, &args[0]);
+            let arg = evaluate_expr(row, &args[0], params);
             if let Value::Text(s) = arg {
                 Value::Text(s.to_lowercase())
             } else {
@@ -216,7 +267,7 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 1 {
                 return Value::Null;
             }
-            let arg = evaluate_expr(row, &args[0]);
+            let arg = evaluate_expr(row, &args[0], params);
             match arg {
                 Value::Text(s) => Value::Integer(s.len() as i64),
                 Value::Vector(v) => Value::Integer(v.len() as i64),
@@ -230,7 +281,7 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 1 {
                 return Value::Null;
             }
-            let arg = evaluate_expr(row, &args[0]);
+            let arg = evaluate_expr(row, &args[0], params);
             match arg {
                 Value::Integer(i) => Value::Integer(i.abs()),
                 Value::Float(f) => Value::Float(ordered_float::OrderedFloat(f.abs())),
@@ -242,7 +293,7 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr]) -> Value {
             if args.len() != 1 {
                 return Value::Null;
             }
-            let arg = evaluate_expr(row, &args[0]);
+            let arg = evaluate_expr(row, &args[0], params);
             if let Value::Float(f) = arg {
                 Value::Integer(f.round() as i64)
             } else {

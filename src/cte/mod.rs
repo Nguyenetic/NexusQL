@@ -229,6 +229,8 @@ impl RecursiveCTE {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planner::PlanCost;
+    use crate::types::{ResultSet, Row, Value};
 
     #[test]
     fn test_simple_cte() {

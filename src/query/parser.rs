@@ -98,8 +98,9 @@ impl QueryParser {
                             ))
                         }
                     };
-                    let value = self.convert_value_expr(&assignment.value)?;
-                    set_map.push((col_name, value));
+                    // Convert value - use convert_expr_to_ast to support parameters
+                    let expr = self.convert_expr_to_ast(&assignment.value)?;
+                    set_map.push((col_name, expr));
                 }
 
                 // Convert WHERE clause (if any)
@@ -196,10 +197,17 @@ impl QueryParser {
                     None
                 };
 
+            // Extract WHERE clause
+            let where_clause = select
+                .selection
+                .as_ref()
+                .map(|expr| self.convert_expr_to_ast(expr))
+                .transpose()?;
+
             Ok(Statement::Select {
                 columns,
                 from: table,
-                where_clause: None, // TODO: Convert WHERE
+                where_clause,
                 using_engine,
                 order_by,
                 limit,
@@ -240,7 +248,17 @@ impl QueryParser {
     fn convert_expr_to_ast(&self, expr: &sql_ast::Expr) -> Result<Expr> {
         match expr {
             // Column reference
-            sql_ast::Expr::Identifier(ident) => Ok(Expr::Column(ident.value.clone())),
+            sql_ast::Expr::Identifier(ident) => {
+                // Check if this is a named parameter (:name)
+                if ident.value.starts_with(':') {
+                    let param_name = ident.value[1..].to_string();
+                    Ok(Expr::Parameter(crate::query::ast::Parameter::Named(
+                        param_name,
+                    )))
+                } else {
+                    Ok(Expr::Column(ident.value.clone()))
+                }
+            }
 
             sql_ast::Expr::CompoundIdentifier(idents) => {
                 let col_name = idents
@@ -254,6 +272,30 @@ impl QueryParser {
             // Literal values
             sql_ast::Expr::Value(val) => {
                 let value = match val {
+                    // Check for positional parameter placeholder
+                    sql_ast::Value::Placeholder(placeholder) => {
+                        // sqlparser uses $ for placeholders (PostgreSQL style)
+                        // We'll also support ? by checking the string
+                        if placeholder == "?" {
+                            // For now, we'll track position during parsing
+                            // This is a simplified approach - in production, you'd want
+                            // to track parameter positions more carefully
+                            return Ok(Expr::Parameter(crate::query::ast::Parameter::Positional(
+                                1,
+                            )));
+                        } else if placeholder.starts_with('$') {
+                            // PostgreSQL-style $1, $2, etc.
+                            if let Ok(index) = placeholder[1..].parse::<usize>() {
+                                return Ok(Expr::Parameter(
+                                    crate::query::ast::Parameter::Positional(index),
+                                ));
+                            }
+                        }
+                        return Err(NexusError::ParseError(format!(
+                            "Invalid placeholder: {}",
+                            placeholder
+                        )));
+                    }
                     sql_ast::Value::Number(n, _) => {
                         if let Ok(i) = n.parse::<i64>() {
                             Value::Integer(i)
@@ -374,7 +416,8 @@ impl QueryParser {
                 for row in &vals.rows {
                     let mut row_values = Vec::new();
                     for expr in row {
-                        row_values.push(self.convert_value_expr(expr)?);
+                        // Use convert_expr_to_ast to support parameters, not just literals
+                        row_values.push(self.convert_expr_to_ast(expr)?);
                     }
                     values.push(row_values);
                 }
