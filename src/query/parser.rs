@@ -50,6 +50,18 @@ impl QueryParser {
                     .collect(),
             }),
 
+            sql_ast::Statement::StartTransaction { .. } => {
+                // Handle BEGIN / START TRANSACTION - just return empty result
+                Ok(Statement::Select {
+                    columns: vec![SelectItem::Wildcard],
+                    from: String::new(),
+                    where_clause: None,
+                    using_engine: None,
+                    order_by: None,
+                    limit: None,
+                })
+            }
+
             sql_ast::Statement::Commit { .. } => {
                 // Handle COMMIT - just return empty result
                 Ok(Statement::Select {
