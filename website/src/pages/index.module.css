@@ -1,0 +1,75 @@
+.heroBanner {
+  padding: 4rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 2rem;
+  gap: 1rem;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.badges img {
+  height: 20px;
+}
+
+.codeSection {
+  padding: 4rem 0;
+  background-color: var(--ifm-background-surface-color);
+}
+
+.codeSection pre {
+  background-color: var(--ifm-code-background);
+  padding: 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.codeSection code {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.featureHighlight {
+  padding: 4rem 0;
+}
+
+.featureHighlight h3 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.featureHighlight p {
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.6;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem 1rem;
+  }
+
+  .buttons {
+    flex-direction: column;
+  }
+
+  .buttons > * {
+    width: 100%;
+    max-width: 300px;
+  }
+}
