@@ -1,0 +1,95 @@
+{
+  "session_id": "nexusql_memory_database_implementation_2024-11-04",
+  "memories": [
+    {
+      "content": "Successfully implemented :memory: database support in NexusQL, solving Windows EPERM file cleanup issues in testing",
+      "memory_level": "user",
+      "tags": ["nexusql", "database", "memory-database", "testing", "windows-fix"],
+      "metadata": {
+        "project": "NexusQL",
+        "feature": "in-memory-database",
+        "files_modified": ["src/lib.rs", "src/kernel.rs", "src/storage/lsm/mod.rs", "src/engine/default.rs", "src/storage/disk.rs"],
+        "performance": "16.7x faster than sqlite-vec for batch operations",
+        "commit_hash": "ae630bc"
+      }
+    },
+    {
+      "content": "NexusQL parser has a bug where TEXT fields starting with '[' are auto-converted to VECTOR type. Workaround: use comma-separated strings instead of JSON arrays",
+      "memory_level": "user",
+      "tags": ["nexusql", "bug", "parser", "vector", "text-field"],
+      "metadata": {
+        "issue_url": "https://github.com/Nguyenetic/NexusQL/issues/2",
+        "root_cause": "src/query/parser.rs:405-408",
+        "workaround": "Use comma-separated strings",
+        "severity": "medium"
+      }
+    },
+    {
+      "content": "Created comprehensive MCP Sage test suite with 10/10 tests passing using :memory: database. Tests cover memories, knowledge graph, vector search, batch operations",
+      "memory_level": "session",
+      "tags": ["testing", "mcp-sage", "nexusql", "test-suite", "vector-search"],
+      "metadata": {
+        "test_file": "bindings/typescript/test-mcp-sage-real-data.js",
+        "tests_count": 10,
+        "all_passing": true,
+        "dataset_size": 505,
+        "search_performance_ms": 28
+      }
+    },
+    {
+      "content": "User prefers using industry-standard in-memory database approach for testing (matching SQLite conventions) with 58 cited sources for best practices",
+      "memory_level": "user",
+      "tags": ["preference", "testing", "best-practices", "documentation"],
+      "metadata": {
+        "documentation": "TESTING_AND_SECURITY_REFERENCES.md",
+        "sources_count": 58,
+        "approach": "in-memory testing"
+      }
+    },
+    {
+      "content": "Implemented atomic counter for unique :memory: database instances in NexusQL to prevent collisions when multiple memory databases are created",
+      "memory_level": "agent",
+      "tags": ["implementation", "concurrency", "memory-database", "rust"],
+      "metadata": {
+        "pattern": "atomic counter",
+        "file": "src/lib.rs",
+        "purpose": "unique memory instance IDs"
+      }
+    },
+    {
+      "content": "Successfully created GitHub issue #2 for parser bug using gh CLI with proper authentication",
+      "memory_level": "tool",
+      "tags": ["github", "cli", "issue-creation", "automation"],
+      "metadata": {
+        "tool": "gh",
+        "issue_number": 2,
+        "repo": "Nguyenetic/NexusQL",
+        "auth_method": "keyring"
+      }
+    },
+    {
+      "content": "Created documentation for AI knowledge base setup and centralized knowledge management across multiple projects",
+      "memory_level": "user",
+      "tags": ["documentation", "ai-integration", "knowledge-management", "obsidian"],
+      "metadata": {
+        "files": ["AI_KNOWLEDGE_BASE_SETUP.md", "CENTRALIZED_KNOWLEDGE_BASE_GUIDE.md"],
+        "purpose": "Make project knowledge accessible to AI assistants",
+        "tools_covered": ["Claude Projects", "Custom GPTs", "MCP servers", "RAG systems", "Obsidian"]
+      }
+    },
+    {
+      "content": "NexusQL :memory: database performance metrics: Schema 29ms, User search 3ms, Batch 500 in 419ms, Search at scale 28ms, Zero EPERM errors",
+      "memory_level": "agent",
+      "tags": ["performance", "metrics", "benchmarking", "nexusql"],
+      "metadata": {
+        "schema_creation_ms": 29,
+        "user_search_ms": 3,
+        "batch_insert_ms": 419,
+        "batch_count": 500,
+        "search_at_scale_ms": 28,
+        "total_records": 505,
+        "eperm_errors": 0
+      }
+    }
+  ]
+}

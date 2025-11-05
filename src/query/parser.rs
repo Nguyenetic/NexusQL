@@ -103,10 +103,10 @@ impl QueryParser {
                     set_map.push((col_name, expr));
                 }
 
-                // Convert WHERE clause (if any)
+                // Convert WHERE clause (if any) - use convert_expr_to_ast to support parameters
                 let where_clause = selection
                     .as_ref()
-                    .map(|expr| self.convert_where_expr(expr))
+                    .map(|expr| self.convert_expr_to_ast(expr))
                     .transpose()?;
 
                 Ok(Statement::Update {
@@ -145,11 +145,11 @@ impl QueryParser {
                     }
                 };
 
-                // Convert WHERE clause (if any)
+                // Convert WHERE clause (if any) - use convert_expr_to_ast to support parameters
                 let where_clause = delete
                     .selection
                     .as_ref()
-                    .map(|expr| self.convert_where_expr(expr))
+                    .map(|expr| self.convert_expr_to_ast(expr))
                     .transpose()?;
 
                 Ok(Statement::Delete {
