@@ -9,6 +9,24 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 - **TypeScript/Node.js bindings** (`bindings/typescript/`) - N-API native module for JavaScript
 - **Python bindings** (`bindings/python/`) - PyO3-based bindings (planned)
 
+## GitHub CLI Configuration
+
+**IMPORTANT:** Always use GitHub CLI with keyring authentication, NOT environment tokens.
+
+Before using any `gh` commands, ensure the GITHUB_TOKEN environment variable is unset:
+```bash
+# Unset the environment token
+unset GITHUB_TOKEN  # Unix/macOS
+set GITHUB_TOKEN=   # Windows CMD
+$env:GITHUB_TOKEN = $null  # Windows PowerShell
+
+# Then use gh CLI which will use keyring authentication
+gh issue list
+gh pr create
+```
+
+**Why:** The keyring authentication is more reliable and doesn't conflict with the interactive GitHub CLI session.
+
 ## Build and Test Commands
 
 ### Rust Core Library
