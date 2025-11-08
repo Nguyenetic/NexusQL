@@ -361,7 +361,6 @@ impl SmartQueryCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::PlanCost;
     use crate::types::{ResultSet, Row, Value};
 
     fn create_test_result() -> ResultSet {

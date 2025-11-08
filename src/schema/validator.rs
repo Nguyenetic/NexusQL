@@ -428,7 +428,6 @@ impl ForeignKeyValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::PlanCost;
     use crate::schema::{ColumnDef, DataType};
     use crate::types::{ResultSet, Row, Value};
 

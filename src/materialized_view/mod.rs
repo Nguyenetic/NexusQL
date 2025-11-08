@@ -338,7 +338,6 @@ impl Default for MaterializedViewManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::PlanCost;
     use crate::types::{ResultSet, Row, Value};
 
     #[test]
