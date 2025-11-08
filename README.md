@@ -11,7 +11,7 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 [![Tests](https://img.shields.io/badge/tests-237%20passing-brightgreen.svg)]()
 
-[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Examples](#-examples)
+[Getting Started](#-quick-start) • [Installation](#-installation) • [API Reference](#-api-reference) • [Migration Guide](#-migration-guide) • [Examples](#-examples) • [Changelog](#-changelog)
 
 ---
 
@@ -281,39 +281,145 @@ async fn main() -> Result<()> {
 
 ---
 
-## 📚 Documentation
+## 📚 API Reference
 
-### 📖 Getting Started
-- [Installation Guide](docs/guides/installation.md)
-- [Quick Start Tutorial](docs/guides/getting-started.md)
-- [Migration from SQLite](docs/guides/migration/from-sqlite.md)
-- [Migration from PostgreSQL](docs/guides/migration/from-postgres.md)
+<div align="center">
 
-### 🔧 API Reference
-- **[TypeScript API](docs/api/typescript/README.md)** - Complete Node.js/TypeScript reference
-  - [Classes](docs/api/typescript/CLASSES.md) - NexusDb, Transaction, PreparedStatement
-  - [Methods](docs/api/typescript/METHODS.md) - Complete method reference
-  - [Interfaces](docs/api/typescript/INTERFACES.md) - QueryResult, Field
-  - [Examples](docs/api/typescript/EXAMPLES.md) - Real-world usage patterns
-- **[Rust API](docs/api/rust/README.md)** - Rust library documentation
-- **[Python API](docs/api/python/README.md)** - Python bindings (coming soon)
+**[📖 Getting Started](#-quick-start)** • **[🔌 TypeScript API](#typescript-api)** • **[🦀 Rust API](#rust-api)** • **[🔄 Migration Guide](#-migration-guide)** • **[📚 Guides](#guides)** • **[🏗️ Architecture](#architecture)**
 
-### 📘 Guides
-- [Parameterized Queries](docs/guides/parameterized-queries.md) - SQL injection prevention
-- [Vector Search](docs/guides/vector-search.md) - Semantic search and embeddings
-- [Transactions](docs/guides/transactions.md) - ACID guarantees and patterns
-- [Performance Optimization](docs/guides/performance.md) - Tuning and best practices
+</div>
 
-### 🏗️ Architecture
-- [System Architecture](docs/architecture/README.md) - Overall design
-- [Neural Technologies](docs/architecture/neural-technologies.md) - HDC, ColBERT, HNSW
-- [Storage Engine](docs/architecture/storage-engine.md) - LSM tree and WAL
-- [Transaction System](docs/architecture/transaction-system.md) - MVCC implementation
+---
 
-### 👨‍💻 Contributing
-- [Contributing Guide](CONTRIBUTING.md) - How to contribute
-- [Code of Conduct](CODE_OF_CONDUCT.md) - Community standards
-- [Security Policy](SECURITY.md) - Reporting vulnerabilities
+### TypeScript API
+
+Complete Node.js/TypeScript API reference with interactive examples.
+
+#### Core Classes
+| Class | Description | Documentation |
+|-------|-------------|---------------|
+| **NexusDB** | Main database class | [API Docs](docs/api/typescript/CLASSES.md#nexusdb) |
+| **Transaction** | ACID transaction handle | [API Docs](docs/api/typescript/CLASSES.md#transaction) |
+| **PreparedStatement** | Compiled query with parameters | [API Docs](docs/api/typescript/CLASSES.md#preparedstatement) |
+
+#### Key Methods
+| Method | Purpose | Example |
+|--------|---------|---------|
+| `execute(sql)` | Run SQL without parameters | [Docs](docs/api/typescript/METHODS.md#execute) |
+| `execute_with_params(sql, params)` | Parameterized queries (SQL injection safe) | [Docs](docs/api/typescript/METHODS.md#execute_with_params) |
+| `query(sql)` | SELECT queries | [Docs](docs/api/typescript/METHODS.md#query) |
+| `begin_transaction()` | Start ACID transaction | [Docs](docs/api/typescript/METHODS.md#begin_transaction) |
+| `vectorSearch(table, vector, limit)` | Semantic search with HNSW | [Docs](docs/api/typescript/METHODS.md#vectorsearch) |
+
+📘 **[Complete TypeScript API Reference →](docs/api/typescript/README.md)**
+
+---
+
+### Rust API
+
+Native Rust library with async support and zero-copy operations.
+
+#### Core Types
+| Type | Description | Documentation |
+|------|-------------|---------------|
+| **NexusSQL** | Main database struct | [docs.rs](https://docs.rs/nexusql/latest/nexusql/struct.NexusSQL.html) |
+| **NexusError** | Type-safe error handling | [docs.rs](https://docs.rs/nexusql/latest/nexusql/enum.NexusError.html) |
+| **Value** | SQL value types | [docs.rs](https://docs.rs/nexusql/latest/nexusql/types/enum.Value.html) |
+| **Row** | Query result row | [docs.rs](https://docs.rs/nexusql/latest/nexusql/types/struct.Row.html) |
+| **ResultSet** | Query results | [docs.rs](https://docs.rs/nexusql/latest/nexusql/types/struct.ResultSet.html) |
+
+📘 **[Complete Rust API Reference →](https://docs.rs/nexusql/latest/nexusql/)**
+
+---
+
+### Guides
+
+#### Security & Best Practices
+- 🔒 [Parameterized Queries](docs/guides/parameterized-queries.md) - SQL injection prevention
+- 🔐 [Authentication & Authorization](docs/guides/auth.md) - RBAC and row-level security
+- ✅ [Error Handling](docs/guides/error-handling.md) - Type-safe error management
+
+#### Data Operations
+- 🔍 [Vector Search](docs/guides/vector-search.md) - Semantic search with HNSW
+- 💾 [Transactions](docs/guides/transactions.md) - ACID guarantees and patterns
+- 📊 [Batch Operations](docs/guides/batch-operations.md) - 10-100× faster inserts
+
+#### Performance
+- ⚡ [Performance Optimization](docs/guides/performance.md) - Tuning and best practices
+- 📈 [Indexing Strategies](docs/guides/indexing.md) - B-Tree, HNSW, GIN, BRIN
+- 💾 [Caching](docs/guides/caching.md) - Query cache (49× speedup)
+
+---
+
+### Architecture
+
+Deep-dive into NexusQL's internal design and neural technologies.
+
+- 🏗️ [System Overview](ARCHITECTURE.md) - High-level architecture
+- 🧠 [Neural Technologies](NEURAL_TECHNOLOGIES.md) - HDC, ColBERT, HNSW explained
+- 💽 [Storage Engine](docs/architecture/storage-engine.md) - LSM tree and WAL
+- 🔄 [Transaction System](docs/architecture/transaction-system.md) - MVCC implementation
+- 🎯 [Query Optimizer](docs/architecture/optimizer.md) - Cost-based optimization
+
+---
+
+## 🔄 Migration Guide
+
+<div align="center">
+
+### Upgrading from v2.x to v3.x
+
+**[📖 Complete Migration Guide →](MIGRATION.md)**
+
+</div>
+
+NexusQL v3.x introduces important API changes for better type safety and consistency. The migration guide provides:
+
+- ✅ **Step-by-step migration checklist**
+- 🔄 **Before/after code examples** for all breaking changes
+- 🛠️ **Automated migration helpers** (deprecation warnings)
+- 📚 **Common migration patterns** with real-world scenarios
+
+**Key Changes:**
+- `Database` → `NexusSQL` (type alias provided for compatibility)
+- `Database::open()` → `NexusSQL::new()`
+- `anyhow::Error` → `NexusError` (structured error types)
+- `execute_params()` → `execute_with_params()`
+- Row access: `row[i]` → `row.values[i]`
+
+**Migration from other databases:**
+- [SQLite Migration Guide](docs/guides/migration/from-sqlite.md)
+- [PostgreSQL Migration Guide](docs/guides/migration/from-postgres.md)
+
+---
+
+## 📝 Changelog
+
+**[View Complete Changelog →](bindings/typescript/CHANGELOG.md)**
+
+### Latest Release: v3.2.0 (2025-01-07)
+
+- ✨ **NEW:** CREATE INDEX support for B-Tree indexes
+- ✨ **NEW:** Multi-column index parsing
+- ✅ **274 tests passing** (100% success rate)
+- 📚 Updated migration guide and API documentation
+
+### Recent Releases
+
+- **v3.1.0** - HNSW algorithm fixes, all tests passing
+- **v3.0.0** - Parameterized queries, SQL injection prevention
+- **v2.7.0** - API improvements (NexusSQL rename)
+
+---
+
+## 👨‍💻 Contributing
+
+We welcome contributions! See our guides:
+
+- 📖 [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- 🤝 [Code of Conduct](CODE_OF_CONDUCT.md) - Community standards
+- 🔒 [Security Policy](SECURITY.md) - Reporting vulnerabilities
+- 💬 [GitHub Discussions](https://github.com/Nguyenetic/NexusQL/discussions) - Ask questions
 
 ---
 

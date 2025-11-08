@@ -224,3 +224,62 @@ impl NexusSQL {
         self.kernel.shutdown().await
     }
 }
+
+// ============================================================================
+// Backwards Compatibility Layer
+// ============================================================================
+
+/// Type alias for backwards compatibility with v2.x API
+///
+/// # Deprecation Notice
+///
+/// `Database` has been renamed to `NexusSQL` in v3.x for better clarity.
+/// This alias is provided for backwards compatibility but will be removed in v4.0.
+///
+/// # Migration
+///
+/// Please update your code:
+///
+/// ```rust,ignore
+/// // Old (v2.x) - DEPRECATED
+/// use nexusql::Database;
+/// let db = Database::open("data.db").await?;
+///
+/// // New (v3.x) - RECOMMENDED
+/// use nexusql::NexusSQL;
+/// let db = NexusSQL::new("data.db").await?;
+/// ```
+///
+/// See [MIGRATION.md](../MIGRATION.md) for complete migration guide.
+#[deprecated(
+    since = "3.0.0",
+    note = "Use `NexusSQL` instead. See MIGRATION.md for migration guide."
+)]
+pub type Database = NexusSQL;
+
+#[allow(deprecated)]
+impl Database {
+    /// Open a database (deprecated method name)
+    ///
+    /// # Deprecation Notice
+    ///
+    /// Use `NexusSQL::new()` instead. This method is provided for backwards
+    /// compatibility only and will be removed in v4.0.
+    ///
+    /// # Migration
+    ///
+    /// ```rust,ignore
+    /// // Old
+    /// let db = Database::open("data.db").await?;
+    ///
+    /// // New
+    /// let db = NexusSQL::new("data.db").await?;
+    /// ```
+    #[deprecated(
+        since = "3.0.0",
+        note = "Use `NexusSQL::new()` instead. See MIGRATION.md for migration guide."
+    )]
+    pub async fn open(path: &str) -> Result<Self> {
+        NexusSQL::new(path).await
+    }
+}
