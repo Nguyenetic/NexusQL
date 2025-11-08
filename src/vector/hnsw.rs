@@ -210,10 +210,11 @@ impl HNSWIndex {
             }
         }
 
-        w.into_sorted_vec()
-            .into_iter()
-            .map(|e| (e.row_id, e.distance))
-            .collect()
+        // into_sorted_vec() returns largest to smallest due to reversed ordering
+        // We need smallest to largest, so reverse it
+        let mut sorted = w.into_sorted_vec();
+        sorted.reverse();
+        sorted.into_iter().map(|e| (e.row_id, e.distance)).collect()
     }
 }
 
@@ -339,11 +340,9 @@ impl VectorIndex for HNSWIndex {
         }
 
         // Search layer 0 with ef_search
-        let mut candidates = self.search_layer(query, ep, self.config.ef_search, 0);
+        let candidates = self.search_layer(query, ep, self.config.ef_search, 0);
 
-        // Sort by distance ascending (nearest first)
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
+        // search_layer returns results sorted by distance (nearest first)
         // Return top k
         let results: Vec<VectorSearchResult> = candidates
             .iter()
@@ -434,7 +433,9 @@ impl Eq for MaxHeapEntry {}
 
 impl PartialOrd for MaxHeapEntry {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance.partial_cmp(&other.distance)
+        // Reverse for min-heap behavior (pop closest candidate first)
+        // HNSW algorithm requires exploring nearest candidates first
+        other.distance.partial_cmp(&self.distance)
     }
 }
 
