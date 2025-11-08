@@ -51,6 +51,36 @@ impl QueryParser {
                     .collect(),
             }),
 
+            sql_ast::Statement::CreateIndex(create_index) => {
+                // Extract fields from the CreateIndex struct
+                let index_name = create_index
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "unnamed_index".to_string());
+                let table = create_index.table_name.to_string();
+
+                // Extract column names from OrderByExpr
+                let column_names: Vec<String> = create_index
+                    .columns
+                    .iter()
+                    .filter_map(|order_expr| {
+                        if let sql_ast::Expr::Identifier(ident) = &order_expr.expr {
+                            Some(ident.value.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                Ok(Statement::CreateIndex {
+                    name: index_name,
+                    table,
+                    columns: column_names,
+                    unique: create_index.unique,
+                })
+            }
+
             sql_ast::Statement::StartTransaction { .. } => {
                 // Handle BEGIN / START TRANSACTION
                 Ok(Statement::Transaction {
@@ -671,6 +701,67 @@ mod tests {
                 assert_eq!(limit, Some(10));
             }
             _ => panic!("Wrong type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_create_index() {
+        let stmt = QueryParser::parse("CREATE INDEX idx_user_email ON users (email)").unwrap();
+        match stmt {
+            Statement::CreateIndex {
+                name,
+                table,
+                columns,
+                unique,
+            } => {
+                assert_eq!(name, "idx_user_email");
+                assert_eq!(table, "users");
+                assert_eq!(columns, vec!["email"]);
+                assert_eq!(unique, false);
+            }
+            _ => panic!("Expected CreateIndex"),
+        }
+    }
+
+    #[test]
+    fn test_parse_create_unique_index() {
+        let stmt =
+            QueryParser::parse("CREATE UNIQUE INDEX idx_user_email ON users (email)").unwrap();
+        match stmt {
+            Statement::CreateIndex {
+                name,
+                table,
+                columns,
+                unique,
+            } => {
+                assert_eq!(name, "idx_user_email");
+                assert_eq!(table, "users");
+                assert_eq!(columns, vec!["email"]);
+                assert_eq!(unique, true);
+            }
+            _ => panic!("Expected CreateIndex with unique=true"),
+        }
+    }
+
+    #[test]
+    fn test_parse_create_multi_column_index() {
+        let stmt = QueryParser::parse(
+            "CREATE INDEX idx_user_name_email ON users (name, email, created_at)",
+        )
+        .unwrap();
+        match stmt {
+            Statement::CreateIndex {
+                name,
+                table,
+                columns,
+                unique,
+            } => {
+                assert_eq!(name, "idx_user_name_email");
+                assert_eq!(table, "users");
+                assert_eq!(columns, vec!["name", "email", "created_at"]);
+                assert_eq!(unique, false);
+            }
+            _ => panic!("Expected CreateIndex with multiple columns"),
         }
     }
 }

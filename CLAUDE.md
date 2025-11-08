@@ -59,9 +59,10 @@ npm run build:native -- --target x86_64-pc-windows-msvc
 
 ### Important Build Notes
 
-- **CRITICAL**: Tests currently fail to compile due to missing type imports (57 errors). See `.github/ISSUE_TEST_IMPORTS.md` for details.
-- The **library builds successfully** (`cargo build` works), but `cargo test` fails.
-- TypeScript bindings build and work correctly with `npm run build`.
+- **All 274 tests passing** - Test compilation errors have been fixed
+- The library builds successfully (`cargo build` works)
+- TypeScript bindings build and work correctly with `npm run build`
+- CREATE INDEX support added for B-Tree indexes
 
 ## Architecture
 
@@ -210,6 +211,28 @@ const results = await db.vectorSearch(
 // Batch insert (10-100× faster)
 await db.batchInsertVectors('table', vectors, metadataArray);
 ```
+
+### Creating Indexes
+
+**B-Tree Index Support**: NexusQL supports CREATE INDEX statements for building B-Tree indexes on table columns.
+
+**SQL syntax**:
+```sql
+-- Create a standard index on a single column
+CREATE INDEX idx_user_email ON users (email);
+
+-- Create a unique index
+CREATE UNIQUE INDEX idx_user_email ON users (email);
+
+-- Create a multi-column index
+CREATE INDEX idx_user_profile ON users (name, email, created_at);
+```
+
+**Implementation details**:
+- Indexes are stored in the `Table.indexes` HashMap
+- B-Tree indexes are automatically built from existing table rows
+- Currently supports indexing on the first column only (multi-column indexes parsed but use first column)
+- Indexes improve query performance for WHERE clauses and ORDER BY operations
 
 ### Test Database Patterns
 

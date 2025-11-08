@@ -31,6 +31,48 @@ impl Executor {
                 self.tables.insert(name.to_string(), table);
                 Ok(ResultSet::empty())
             }
+            Statement::CreateIndex {
+                name: index_name,
+                table,
+                columns,
+                unique,
+            } => {
+                if let Some(t) = self.tables.get_mut(table) {
+                    // For now, create a B-Tree index on the first column
+                    // TODO: Support multi-column indexes
+                    if let Some(first_col) = columns.first() {
+                        let col_idx =
+                            t.columns
+                                .iter()
+                                .position(|c| c == first_col)
+                                .ok_or_else(|| {
+                                    crate::NexusError::QueryError(format!(
+                                        "Column {} not found in table {}",
+                                        first_col, table
+                                    ))
+                                })?;
+
+                        // Create B-Tree index
+                        let mut index =
+                            crate::index::btree::BTreeIndex::new(first_col.clone(), col_idx);
+
+                        // Build index from existing rows
+                        for (row_id, row) in t.rows.iter().enumerate() {
+                            index.insert(row, row_id);
+                        }
+
+                        // Store index in table
+                        t.indexes.insert(index_name.clone(), index);
+                    }
+
+                    Ok(ResultSet::empty())
+                } else {
+                    Err(crate::NexusError::QueryError(format!(
+                        "Table {} not found",
+                        table
+                    )))
+                }
+            }
             Statement::Insert {
                 table,
                 columns: _,

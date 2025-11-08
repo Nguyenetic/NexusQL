@@ -10,6 +10,12 @@ pub enum Statement {
         name: String,
         columns: Vec<ColumnDef>,
     },
+    CreateIndex {
+        name: String,
+        table: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
     Insert {
         table: String,
         columns: Option<Vec<String>>,
