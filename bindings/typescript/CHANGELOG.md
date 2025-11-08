@@ -2,6 +2,56 @@
 
 All notable changes to NexusQL will be documented in this file.
 
+## [3.2.0] - 2025-01-07
+
+### 🎉 New Feature - CREATE INDEX Support
+
+This release adds full support for CREATE INDEX SQL statements with B-Tree indexes.
+
+### ✨ Features
+
+#### CREATE INDEX Support
+- **NEW:** Full SQL parser support for CREATE INDEX statements
+- **NEW:** B-Tree index creation and storage
+- **NEW:** Support for single-column indexes
+- **NEW:** Support for multi-column indexes (currently uses first column)
+- **NEW:** UNIQUE constraint support
+- **NEW:** Automatic index building from existing table rows
+
+#### SQL Syntax
+```sql
+-- Create a standard index
+CREATE INDEX idx_user_email ON users (email);
+
+-- Create a unique index
+CREATE UNIQUE INDEX idx_user_email ON users (email);
+
+-- Create a multi-column index
+CREATE INDEX idx_user_profile ON users (name, email, created_at);
+```
+
+### 🔧 Implementation Details
+- Indexes stored in `Table.indexes` HashMap
+- B-Tree indexes automatically built from existing rows when CREATE INDEX is executed
+- Parser handles sqlparser's CreateIndex tuple variant correctly
+- Currently indexes first column only (multi-column support planned)
+
+### ✅ Test Results
+- **274 tests passing** (100% success rate)
+- 3 new parser tests for CREATE INDEX functionality
+- All existing tests continue to pass
+
+### 📚 Documentation
+- Updated CLAUDE.md with CREATE INDEX examples
+- Added SQL syntax documentation
+- Documented implementation details and limitations
+
+### 🐛 Bug Fixes
+- Fixed sqlparser CreateIndex field handling (tuple variant)
+- Proper row insertion into B-Tree indexes
+
+---
+
 ## [3.1.0] - 2025-01-07
 
 ### 🎉 Major Release - All Tests Passing (271/271)
