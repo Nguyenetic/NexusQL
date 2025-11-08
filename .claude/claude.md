@@ -2,6 +2,28 @@
 
 This file contains important instructions for Claude Code when working on this project.
 
+## Release Workflow
+
+**IMPORTANT:** After pushing fixes to GitHub, ALWAYS publish to npm.
+
+### Standard Release Process:
+1. Fix bugs and add features
+2. Run tests: `cargo test --lib`
+3. Commit and push to GitHub
+4. **THEN IMMEDIATELY:** Update npm package
+   - Update version in `bindings/typescript/package.json`
+   - Update `bindings/typescript/CHANGELOG.md`
+   - Build: `cd bindings/typescript && npm run build`
+   - Publish: `npm publish`
+   - Commit version bump and push
+
+### Why This Matters:
+- Users install from npm, not GitHub
+- Fixes aren't available until npm is updated
+- Version numbers must stay in sync
+
+---
+
 ## GitHub CLI Authentication
 
 **CRITICAL:** Always use GitHub CLI with keyring authentication, NOT environment tokens.

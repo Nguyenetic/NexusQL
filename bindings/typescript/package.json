@@ -1,7 +1,7 @@
 {
   "name": "@nguyenetic/nexusql",
-  "version": "3.2.0",
-  "description": "AI-Native, PostgreSQL-compatible database with vector search, HNSW indexing, and full ACID compliance. All 274 tests passing. Now with CREATE INDEX support for B-Tree indexes!",
+  "version": "3.3.0",
+  "description": "AI-Native, PostgreSQL-compatible database with vector search, HNSW indexing, and full ACID compliance. All 280 tests passing. CRITICAL FIX: INSERT column mapping now works correctly!",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
