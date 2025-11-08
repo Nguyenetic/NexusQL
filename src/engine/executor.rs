@@ -75,7 +75,7 @@ impl Executor {
             }
             Statement::Insert {
                 table,
-                columns: _,
+                columns,
                 values,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
@@ -88,7 +88,36 @@ impl Executor {
                             .map(|expr| evaluate_expr(&empty_row, expr, params))
                             .collect();
 
-                        let row = Row::new(t.columns.clone(), evaluated_values);
+                        // CRITICAL FIX: Map values to correct columns based on INSERT column list
+                        // If columns are specified in INSERT, use them. Otherwise use all table columns.
+                        let (insert_columns, insert_values) = if let Some(ref col_names) = columns {
+                            // Columns explicitly specified: INSERT INTO table (col1, col2) VALUES (val1, val2)
+                            // Map values to the correct column positions in the table
+                            let mut row_values = vec![Value::Null; t.columns.len()];
+
+                            for (i, col_name) in col_names.iter().enumerate() {
+                                if let Some(table_col_idx) =
+                                    t.columns.iter().position(|c| c == col_name)
+                                {
+                                    if i < evaluated_values.len() {
+                                        row_values[table_col_idx] = evaluated_values[i].clone();
+                                    }
+                                } else {
+                                    return Err(crate::NexusError::QueryError(format!(
+                                        "Column {} not found in table {}",
+                                        col_name, table
+                                    )));
+                                }
+                            }
+
+                            (t.columns.clone(), row_values)
+                        } else {
+                            // No columns specified: INSERT INTO table VALUES (val1, val2, val3)
+                            // Use values positionally for all table columns
+                            (t.columns.clone(), evaluated_values)
+                        };
+
+                        let row = Row::new(insert_columns, insert_values);
                         t.insert(row);
                     }
                     Ok(ResultSet::empty())
@@ -289,3 +318,8 @@ impl Executor {
         Ok(result_rows)
     }
 }
+
+// Include comprehensive tests for INSERT column mapping
+#[cfg(test)]
+#[path = "executor_insert_tests.rs"]
+mod executor_insert_tests;
