@@ -267,7 +267,8 @@ mod tests {
     fn test_password_policy_strict() {
         let policy = PasswordPolicy::strict();
 
-        assert!(policy.validate("StrongPass123!").is_err()); // Too short (< 12)
+        assert!(policy.validate("Short1!").is_err()); // Too short (< 12)
+        assert!(policy.validate("StrongPass123!").is_ok()); // Valid (15 chars)
         assert!(policy.validate("VeryStrongPass123!").is_ok()); // Valid
     }
 }
