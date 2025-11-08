@@ -259,6 +259,118 @@ impl Executor {
                     }
                 }
             }
+            Statement::Pragma { name, value } => {
+                // Handle common SQLite PRAGMA statements for compatibility
+                match name.to_lowercase().as_str() {
+                    "foreign_keys" => {
+                        // Return current foreign key enforcement status
+                        // For now, NexusQL doesn't enforce foreign keys, so return 0
+                        let row =
+                            Row::new(vec!["foreign_keys".to_string()], vec![Value::Integer(0)]);
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    "journal_mode" => {
+                        // NexusQL uses WAL-style journaling in LSM storage
+                        let mode = value.as_deref().unwrap_or("WAL");
+                        let row = Row::new(
+                            vec!["journal_mode".to_string()],
+                            vec![Value::Text(mode.to_uppercase())],
+                        );
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    "synchronous" => {
+                        // Return or set synchronous mode (FULL=2, NORMAL=1, OFF=0)
+                        let sync_value = if let Some(v) = value {
+                            match v.to_uppercase().as_str() {
+                                "FULL" => Value::Integer(2),
+                                "NORMAL" => Value::Integer(1),
+                                "OFF" => Value::Integer(0),
+                                _ => Value::Integer(2), // Default to FULL
+                            }
+                        } else {
+                            Value::Integer(2) // Query mode, return current (FULL)
+                        };
+                        let row = Row::new(vec!["synchronous".to_string()], vec![sync_value]);
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    "table_info" => {
+                        // PRAGMA table_info(table_name) - return table schema
+                        if let Some(table_name) = value {
+                            if let Some(table) = self.tables.get(table_name) {
+                                let mut rows = Vec::new();
+                                for (i, col) in table.columns.iter().enumerate() {
+                                    // Format: cid, name, type, notnull, dflt_value, pk
+                                    let row = Row::new(
+                                        vec![
+                                            "cid".to_string(),
+                                            "name".to_string(),
+                                            "type".to_string(),
+                                            "notnull".to_string(),
+                                            "dflt_value".to_string(),
+                                            "pk".to_string(),
+                                        ],
+                                        vec![
+                                            Value::Integer(i as i64),
+                                            Value::Text(col.clone()),
+                                            Value::Text("TEXT".to_string()), // Simplified
+                                            Value::Integer(0),
+                                            Value::Null,
+                                            Value::Integer(0),
+                                        ],
+                                    );
+                                    rows.push(row);
+                                }
+                                Ok(ResultSet::new(rows))
+                            } else {
+                                Err(crate::NexusError::QueryError(format!(
+                                    "Table {} not found",
+                                    table_name
+                                )))
+                            }
+                        } else {
+                            Err(crate::NexusError::QueryError(
+                                "PRAGMA table_info requires a table name".to_string(),
+                            ))
+                        }
+                    }
+                    "user_version" => {
+                        // User-defined version number for schema versioning
+                        let version = value.as_deref().unwrap_or("0");
+                        let row = Row::new(
+                            vec!["user_version".to_string()],
+                            vec![Value::Integer(version.parse::<i64>().unwrap_or(0))],
+                        );
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    "schema_version" => {
+                        // Internal schema version (read-only)
+                        let row =
+                            Row::new(vec!["schema_version".to_string()], vec![Value::Integer(1)]);
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    "encoding" => {
+                        // NexusQL uses UTF-8 encoding
+                        let row = Row::new(
+                            vec!["encoding".to_string()],
+                            vec![Value::Text("UTF-8".to_string())],
+                        );
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    "cache_size" => {
+                        // Query cache size (in pages, -2000 means 2000KB)
+                        let size = value.as_deref().unwrap_or("-2000");
+                        let row = Row::new(
+                            vec!["cache_size".to_string()],
+                            vec![Value::Integer(size.parse::<i64>().unwrap_or(-2000))],
+                        );
+                        Ok(ResultSet::new(vec![row]))
+                    }
+                    _ => {
+                        // For unsupported PRAGMA, return empty result for compatibility
+                        Ok(ResultSet::empty())
+                    }
+                }
+            }
         }
     }
 
@@ -323,3 +435,7 @@ impl Executor {
 #[cfg(test)]
 #[path = "executor_insert_tests.rs"]
 mod executor_insert_tests;
+
+#[cfg(test)]
+#[path = "executor_pragma_tests.rs"]
+mod executor_pragma_tests;

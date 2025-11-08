@@ -41,6 +41,10 @@ pub enum Statement {
     Transaction {
         operation: TransactionOp,
     },
+    Pragma {
+        name: String,
+        value: Option<String>,
+    },
 }
 
 /// Transaction operations

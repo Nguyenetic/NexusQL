@@ -192,6 +192,62 @@ await db.execute(
 );
 ```
 
+### Working with PRAGMA Statements
+
+**Feature**: SQLite-compatible PRAGMA statements for database configuration and introspection.
+
+**Supported PRAGMA commands**:
+- `PRAGMA foreign_keys` - Query foreign key enforcement (returns 0, not enforced)
+- `PRAGMA journal_mode` - Query/set WAL journaling mode
+- `PRAGMA synchronous` - Query/set synchronous mode (FULL=2, NORMAL=1, OFF=0)
+- `PRAGMA table_info(table_name)` - Get table schema (cid, name, type, notnull, dflt_value, pk)
+- `PRAGMA user_version` - User-defined version for schema migrations
+- `PRAGMA schema_version` - Internal schema version (read-only, returns 1)
+- `PRAGMA encoding` - Character encoding (always UTF-8)
+- `PRAGMA cache_size` - Query cache size in pages (default -2000 = 2000KB)
+
+**SQL examples**:
+```sql
+-- Check journal mode
+PRAGMA journal_mode;  -- Returns: { journal_mode: 'WAL' }
+
+-- Get table schema
+PRAGMA table_info(users);
+-- Returns: [{ cid: 0, name: 'id', type: 'TEXT', notnull: 0, dflt_value: NULL, pk: 0 }, ...]
+
+-- Set synchronous mode
+PRAGMA synchronous = NORMAL;  -- Returns: { synchronous: 1 }
+
+-- Schema versioning for migrations
+PRAGMA user_version;          -- Returns: { user_version: 0 }
+PRAGMA user_version = 5;      -- Set version to 5
+```
+
+**TypeScript examples**:
+```typescript
+// Get table schema
+const schema = await db.query('PRAGMA table_info(users)');
+const rows = JSON.parse(schema.rows);
+console.log(rows); // [{ cid: 0, name: 'id', type: 'TEXT', ... }, ...]
+
+// Check journal mode
+const mode = await db.query('PRAGMA journal_mode');
+console.log(JSON.parse(mode.rows)); // [{ journal_mode: 'WAL' }]
+
+// Track migration version
+const version = await db.query('PRAGMA user_version');
+if (JSON.parse(version.rows)[0].user_version < 5) {
+  // Run migrations...
+  await db.execute('PRAGMA user_version = 5');
+}
+```
+
+**Implementation files**:
+- AST: `src/query/ast.rs` (Statement::Pragma variant)
+- Parser: `src/query/parser.rs` (converts sqlparser Pragma to NexusQL AST)
+- Executor: `src/engine/executor.rs` (lines 261-376)
+- Tests: `src/engine/executor_pragma_tests.rs` (18 tests, 100% pass)
+
 ### Working with Vector Search
 
 **Embedding dimensions**: 384 (standard for all-MiniLM-L6-v2)

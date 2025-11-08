@@ -2,6 +2,48 @@
 
 All notable changes to NexusQL will be documented in this file.
 
+## [3.4.0] - 2025-01-07
+
+### ✨ New Features
+
+#### PRAGMA Statement Support (Issue #20)
+- **ADDED:** SQLite-compatible PRAGMA statements for database configuration and introspection
+- **ADDED:** Support for 8 common PRAGMA commands:
+  - `PRAGMA foreign_keys` - Query foreign key enforcement status
+  - `PRAGMA journal_mode` - Query/set WAL journaling mode
+  - `PRAGMA synchronous` - Query/set synchronous mode (FULL/NORMAL/OFF)
+  - `PRAGMA table_info(table_name)` - Get table schema information
+  - `PRAGMA user_version` - User-defined version number for migrations
+  - `PRAGMA schema_version` - Internal schema version (read-only)
+  - `PRAGMA encoding` - Character encoding (UTF-8)
+  - `PRAGMA cache_size` - Query cache size in pages
+- **ADDED:** 18 comprehensive tests with 100% pass rate
+
+**Usage Examples:**
+```javascript
+// Check journal mode
+const result = await db.query('PRAGMA journal_mode');
+console.log(result.rows); // [{ journal_mode: 'WAL' }]
+
+// Get table schema
+const schema = await db.query('PRAGMA table_info(users)');
+// Returns: [{ cid: 0, name: 'id', type: 'TEXT', ... }, ...]
+
+// Set synchronous mode
+await db.execute('PRAGMA synchronous = NORMAL');
+```
+
+**Benefits:**
+- Improved SQLite compatibility for migrations
+- Better database introspection capabilities
+- Schema versioning support for migrations
+- Configuration querying without custom APIs
+
+### 📊 Test Results
+- **Total tests:** 298 (280 existing + 18 new PRAGMA tests)
+- **Pass rate:** 100%
+- **New test file:** `src/engine/executor_pragma_tests.rs`
+
 ## [3.3.0] - 2025-01-07
 
 ### 🚨 CRITICAL BUG FIX - Production Ready

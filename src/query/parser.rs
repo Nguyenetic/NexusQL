@@ -102,6 +102,11 @@ impl QueryParser {
                 })
             }
 
+            sql_ast::Statement::Pragma { name, value, .. } => Ok(Statement::Pragma {
+                name: name.to_string(),
+                value: value.as_ref().map(|v| v.to_string()),
+            }),
+
             sql_ast::Statement::Update {
                 table,
                 assignments,
