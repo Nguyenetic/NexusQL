@@ -9,12 +9,17 @@ pub enum Statement {
     CreateTable {
         name: String,
         columns: Vec<ColumnDef>,
+        if_not_exists: bool,
     },
     CreateIndex {
         name: String,
         table: String,
         columns: Vec<String>,
         unique: bool,
+    },
+    DropTable {
+        name: String,
+        if_exists: bool,
     },
     Insert {
         table: String,
@@ -60,6 +65,8 @@ pub enum TransactionOp {
 pub struct ColumnDef {
     pub name: String,
     pub data_type: DataType,
+    pub is_primary_key: bool,
+    pub is_autoincrement: bool,
 }
 
 /// ORDER BY clause
@@ -111,6 +118,15 @@ pub enum Expr {
 
     /// Function call (e.g., SEMANTIC_SEARCH(...))
     Function { name: String, args: Vec<Expr> },
+
+    /// Wildcard (*) - used in COUNT(*) and similar
+    Wildcard,
+
+    /// IS NULL check
+    IsNull(Box<Expr>),
+
+    /// IS NOT NULL check
+    IsNotNull(Box<Expr>),
 }
 
 /// Parameter placeholder

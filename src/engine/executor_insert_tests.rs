@@ -21,20 +21,29 @@ mod insert_column_mapping_tests {
                         ColumnDef {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "name".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "age".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "email".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                     ],
+                    if_not_exists: false,
                 },
                 &QueryParams::default(),
             )
@@ -85,20 +94,29 @@ mod insert_column_mapping_tests {
                         ColumnDef {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "title".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "embedding".to_string(),
                             data_type: DataType::Vector(3),
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "author".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                     ],
+                    if_not_exists: false,
                 },
                 &QueryParams::default(),
             )
@@ -147,12 +165,17 @@ mod insert_column_mapping_tests {
                         ColumnDef {
                             name: "a".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "b".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                     ],
+                    if_not_exists: false,
                 },
                 &QueryParams::default(),
             )
@@ -191,16 +214,23 @@ mod insert_column_mapping_tests {
                         ColumnDef {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "name".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "optional".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                     ],
+                    if_not_exists: false,
                 },
                 &QueryParams::default(),
             )
@@ -236,7 +266,10 @@ mod insert_column_mapping_tests {
                     columns: vec![ColumnDef {
                         name: "valid".to_string(),
                         data_type: DataType::Text,
+                        is_primary_key: false,
+                        is_autoincrement: false,
                     }],
+                    if_not_exists: false,
                 },
                 &QueryParams::default(),
             )
@@ -271,12 +304,17 @@ mod insert_column_mapping_tests {
                         ColumnDef {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                         ColumnDef {
                             name: "value".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            is_autoincrement: false,
                         },
                     ],
+                    if_not_exists: false,
                 },
                 &QueryParams::default(),
             )

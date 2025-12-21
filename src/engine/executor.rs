@@ -6,7 +6,154 @@ use crate::query::evaluator::{evaluate_expr, evaluate_where, QueryParams};
 use crate::storage::Table;
 use crate::types::{ResultSet, Row, Value};
 use crate::Result;
+use ordered_float::OrderedFloat;
 use std::collections::HashMap;
+
+/// Check if a SELECT list contains aggregate functions
+fn has_aggregate_functions(select_items: &[SelectItem]) -> bool {
+    for item in select_items {
+        if let SelectItem::Expr { expr, .. } = item {
+            if is_aggregate_expr(expr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if an expression is an aggregate function
+fn is_aggregate_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function { name, .. } => {
+            let name_upper = name.to_uppercase();
+            matches!(name_upper.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+        }
+        _ => false,
+    }
+}
+
+/// Evaluate an aggregate function over a set of rows
+fn evaluate_aggregate(rows: &[Row], name: &str, args: &[Expr], params: &QueryParams) -> Value {
+    let name_upper = name.to_uppercase();
+
+    match name_upper.as_str() {
+        "COUNT" => {
+            // COUNT(*) counts all rows, COUNT(column) counts non-NULL values
+            if args.is_empty() || matches!(args.first(), Some(Expr::Wildcard)) {
+                Value::Integer(rows.len() as i64)
+            } else {
+                // Count non-NULL values
+                let count = rows
+                    .iter()
+                    .filter(|row| {
+                        let val = evaluate_expr(row, &args[0], params);
+                        !matches!(val, Value::Null)
+                    })
+                    .count();
+                Value::Integer(count as i64)
+            }
+        }
+        "SUM" => {
+            if args.is_empty() {
+                return Value::Null;
+            }
+            let mut sum: f64 = 0.0;
+            let mut has_value = false;
+            for row in rows {
+                let val = evaluate_expr(row, &args[0], params);
+                match val {
+                    Value::Integer(i) => {
+                        sum += i as f64;
+                        has_value = true;
+                    }
+                    Value::Float(f) => {
+                        sum += f.0;
+                        has_value = true;
+                    }
+                    _ => {}
+                }
+            }
+            if has_value {
+                Value::Float(OrderedFloat(sum))
+            } else {
+                Value::Null
+            }
+        }
+        "AVG" => {
+            if args.is_empty() {
+                return Value::Null;
+            }
+            let mut sum: f64 = 0.0;
+            let mut count: i64 = 0;
+            for row in rows {
+                let val = evaluate_expr(row, &args[0], params);
+                match val {
+                    Value::Integer(i) => {
+                        sum += i as f64;
+                        count += 1;
+                    }
+                    Value::Float(f) => {
+                        sum += f.0;
+                        count += 1;
+                    }
+                    _ => {}
+                }
+            }
+            if count > 0 {
+                Value::Float(OrderedFloat(sum / count as f64))
+            } else {
+                Value::Null
+            }
+        }
+        "MIN" => {
+            if args.is_empty() {
+                return Value::Null;
+            }
+            let mut min_val: Option<Value> = None;
+            for row in rows {
+                let val = evaluate_expr(row, &args[0], params);
+                if matches!(val, Value::Null) {
+                    continue;
+                }
+                min_val = Some(match min_val {
+                    None => val,
+                    Some(current) => {
+                        if val < current {
+                            val
+                        } else {
+                            current
+                        }
+                    }
+                });
+            }
+            min_val.unwrap_or(Value::Null)
+        }
+        "MAX" => {
+            if args.is_empty() {
+                return Value::Null;
+            }
+            let mut max_val: Option<Value> = None;
+            for row in rows {
+                let val = evaluate_expr(row, &args[0], params);
+                if matches!(val, Value::Null) {
+                    continue;
+                }
+                max_val = Some(match max_val {
+                    None => val,
+                    Some(current) => {
+                        if val > current {
+                            val
+                        } else {
+                            current
+                        }
+                    }
+                });
+            }
+            max_val.unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
+    }
+}
 
 pub struct Executor {
     tables: HashMap<String, Table>,
@@ -25,9 +172,27 @@ impl Executor {
 
     pub fn execute(&mut self, statement: &Statement, params: &QueryParams) -> Result<ResultSet> {
         match statement {
-            Statement::CreateTable { name, columns } => {
+            Statement::CreateTable {
+                name,
+                columns,
+                if_not_exists,
+            } => {
+                // If IF NOT EXISTS is specified and table already exists, do nothing
+                if *if_not_exists && self.tables.contains_key(name) {
+                    return Ok(ResultSet::empty());
+                }
+
                 let col_names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
-                let table = Table::new(name.to_string(), col_names);
+                let mut table = Table::new(name.to_string(), col_names);
+
+                // Set AUTO_INCREMENT column if specified
+                for col in columns {
+                    if col.is_autoincrement {
+                        table.set_auto_increment_column(col.name.clone());
+                        break; // Only one AUTO_INCREMENT column allowed
+                    }
+                }
+
                 self.tables.insert(name.to_string(), table);
                 Ok(ResultSet::empty())
             }
@@ -73,6 +238,20 @@ impl Executor {
                     )))
                 }
             }
+            Statement::DropTable { name, if_exists } => {
+                if self.tables.contains_key(name) {
+                    self.tables.remove(name);
+                    Ok(ResultSet::empty())
+                } else if *if_exists {
+                    // IF EXISTS specified, don't error if table doesn't exist
+                    Ok(ResultSet::empty())
+                } else {
+                    Err(crate::NexusError::QueryError(format!(
+                        "Table '{}' does not exist",
+                        name
+                    )))
+                }
+            }
             Statement::Insert {
                 table,
                 columns,
@@ -90,32 +269,45 @@ impl Executor {
 
                         // CRITICAL FIX: Map values to correct columns based on INSERT column list
                         // If columns are specified in INSERT, use them. Otherwise use all table columns.
-                        let (insert_columns, insert_values) = if let Some(ref col_names) = columns {
-                            // Columns explicitly specified: INSERT INTO table (col1, col2) VALUES (val1, val2)
-                            // Map values to the correct column positions in the table
-                            let mut row_values = vec![Value::Null; t.columns.len()];
+                        let (insert_columns, mut insert_values) =
+                            if let Some(ref col_names) = columns {
+                                // Columns explicitly specified: INSERT INTO table (col1, col2) VALUES (val1, val2)
+                                // Map values to the correct column positions in the table
+                                let mut row_values = vec![Value::Null; t.columns.len()];
 
-                            for (i, col_name) in col_names.iter().enumerate() {
-                                if let Some(table_col_idx) =
-                                    t.columns.iter().position(|c| c == col_name)
-                                {
-                                    if i < evaluated_values.len() {
-                                        row_values[table_col_idx] = evaluated_values[i].clone();
+                                for (i, col_name) in col_names.iter().enumerate() {
+                                    if let Some(table_col_idx) =
+                                        t.columns.iter().position(|c| c == col_name)
+                                    {
+                                        if i < evaluated_values.len() {
+                                            row_values[table_col_idx] = evaluated_values[i].clone();
+                                        }
+                                    } else {
+                                        return Err(crate::NexusError::QueryError(format!(
+                                            "Column {} not found in table {}",
+                                            col_name, table
+                                        )));
                                     }
-                                } else {
-                                    return Err(crate::NexusError::QueryError(format!(
-                                        "Column {} not found in table {}",
-                                        col_name, table
-                                    )));
+                                }
+
+                                (t.columns.clone(), row_values)
+                            } else {
+                                // No columns specified: INSERT INTO table VALUES (val1, val2, val3)
+                                // Use values positionally for all table columns
+                                (t.columns.clone(), evaluated_values)
+                            };
+
+                        // AUTO_INCREMENT: Generate ID if the column is NULL
+                        if let Some(ref auto_col) = t.auto_increment_column {
+                            if let Some(auto_col_idx) = t.columns.iter().position(|c| c == auto_col)
+                            {
+                                if insert_values[auto_col_idx] == Value::Null {
+                                    insert_values[auto_col_idx] =
+                                        Value::Integer(t.next_auto_increment_id);
+                                    t.next_auto_increment_id += 1;
                                 }
                             }
-
-                            (t.columns.clone(), row_values)
-                        } else {
-                            // No columns specified: INSERT INTO table VALUES (val1, val2, val3)
-                            // Use values positionally for all table columns
-                            (t.columns.clone(), evaluated_values)
-                        };
+                        }
 
                         let row = Row::new(insert_columns, insert_values);
                         t.insert(row);
@@ -145,6 +337,13 @@ impl Executor {
                 // Apply WHERE clause filter
                 if let Some(expr) = where_clause {
                     rows.retain(|row| evaluate_where(row, expr, params));
+                }
+
+                // Check if this is an aggregate query
+                if has_aggregate_functions(columns) {
+                    // Handle aggregate functions - returns a single row
+                    let result_row = self.evaluate_aggregates(&rows, columns, params)?;
+                    return Ok(ResultSet::new(vec![result_row]));
                 }
 
                 // Apply ORDER BY sorting (especially for vector distance)
@@ -382,6 +581,67 @@ impl Executor {
         &mut self.tables
     }
 
+    /// Evaluate aggregate functions over a set of rows, returning a single result row
+    fn evaluate_aggregates(
+        &self,
+        rows: &[Row],
+        select_items: &[SelectItem],
+        params: &QueryParams,
+    ) -> Result<Row> {
+        let mut result_cols = Vec::new();
+        let mut result_vals = Vec::new();
+
+        for item in select_items {
+            match item {
+                SelectItem::Wildcard => {
+                    // Wildcard in aggregate query - unusual but handle it
+                    // Just return count as a placeholder
+                    result_cols.push("*".to_string());
+                    result_vals.push(Value::Integer(rows.len() as i64));
+                }
+                SelectItem::Expr { expr, alias } => {
+                    let value = if let Expr::Function { name, args } = expr {
+                        if is_aggregate_expr(expr) {
+                            evaluate_aggregate(rows, name, args, params)
+                        } else {
+                            // Non-aggregate function in aggregate query
+                            // Evaluate on first row if available
+                            if let Some(first_row) = rows.first() {
+                                evaluate_expr(first_row, expr, params)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                    } else {
+                        // Non-function expression in aggregate query
+                        // Evaluate on first row if available
+                        if let Some(first_row) = rows.first() {
+                            evaluate_expr(first_row, expr, params)
+                        } else {
+                            Value::Null
+                        }
+                    };
+
+                    // Determine column name
+                    let col_name = if let Some(alias_name) = alias {
+                        alias_name.clone()
+                    } else {
+                        match expr {
+                            Expr::Column(name) => name.clone(),
+                            Expr::Function { name, .. } => name.clone(),
+                            _ => "expr".to_string(),
+                        }
+                    };
+
+                    result_cols.push(col_name);
+                    result_vals.push(value);
+                }
+            }
+        }
+
+        Ok(Row::new(result_cols, result_vals))
+    }
+
     /// Project columns from rows based on SELECT list items
     fn project_columns(
         &self,
@@ -439,3 +699,7 @@ mod executor_insert_tests;
 #[cfg(test)]
 #[path = "executor_pragma_tests.rs"]
 mod executor_pragma_tests;
+
+#[cfg(test)]
+#[path = "executor_autoincrement_tests.rs"]
+mod executor_autoincrement_tests;

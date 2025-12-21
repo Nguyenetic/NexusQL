@@ -134,16 +134,23 @@ mod pragma_tests {
                 ColumnDef {
                     name: "id".to_string(),
                     data_type: DataType::Integer,
+                    is_primary_key: false,
+                    is_autoincrement: false,
                 },
                 ColumnDef {
                     name: "name".to_string(),
                     data_type: DataType::Text,
+                    is_primary_key: false,
+                    is_autoincrement: false,
                 },
                 ColumnDef {
                     name: "email".to_string(),
                     data_type: DataType::Text,
+                    is_primary_key: false,
+                    is_autoincrement: false,
                 },
             ],
+            if_not_exists: false,
         };
         executor.execute(&create_stmt, &params).unwrap();
 

@@ -79,6 +79,22 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
         }
 
         Expr::Function { name, args } => evaluate_function(row, name, args, params),
+
+        Expr::Wildcard => {
+            // Wildcard (*) in expressions - typically used inside COUNT(*)
+            // Return a special marker value that aggregate handlers can recognize
+            Value::Integer(1) // Each row counts as 1
+        }
+
+        Expr::IsNull(inner) => {
+            let val = evaluate_expr(row, inner, params);
+            Value::Boolean(matches!(val, Value::Null))
+        }
+
+        Expr::IsNotNull(inner) => {
+            let val = evaluate_expr(row, inner, params);
+            Value::Boolean(!matches!(val, Value::Null))
+        }
     }
 }
 
@@ -166,6 +182,21 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Text(a), Value::Text(b)) => a == b,
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Null, Value::Null) => true,
+        // Cross-type comparisons for SQL compatibility
+        (Value::Integer(i), Value::Text(s)) | (Value::Text(s), Value::Integer(i)) => {
+            // Try to parse the text as an integer for comparison
+            s.parse::<i64>().map(|parsed| parsed == *i).unwrap_or(false)
+        }
+        (Value::Float(f), Value::Text(s)) | (Value::Text(s), Value::Float(f)) => {
+            // Try to parse the text as a float for comparison
+            s.parse::<f64>()
+                .map(|parsed| ordered_float::OrderedFloat(parsed) == *f)
+                .unwrap_or(false)
+        }
+        (Value::Integer(i), Value::Float(f)) | (Value::Float(f), Value::Integer(i)) => {
+            // Compare integer to float
+            ordered_float::OrderedFloat(*i as f64) == *f
+        }
         _ => false,
     }
 }
@@ -175,6 +206,20 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b)),
         (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
         (Value::Text(a), Value::Text(b)) => Some(a.cmp(b)),
+        // Cross-type comparisons for SQL compatibility
+        (Value::Integer(i), Value::Text(s)) => s
+            .parse::<i64>()
+            .ok()
+            .and_then(|parsed| Some(i.cmp(&parsed))),
+        (Value::Text(s), Value::Integer(i)) => {
+            s.parse::<i64>().ok().and_then(|parsed| Some(parsed.cmp(i)))
+        }
+        (Value::Integer(i), Value::Float(f)) => {
+            ordered_float::OrderedFloat(*i as f64).partial_cmp(f)
+        }
+        (Value::Float(f), Value::Integer(i)) => {
+            f.partial_cmp(&ordered_float::OrderedFloat(*i as f64))
+        }
         _ => None,
     }
 }
