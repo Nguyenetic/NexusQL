@@ -200,7 +200,10 @@ impl Executor {
                 name: index_name,
                 table,
                 columns,
-                unique,
+                unique: _,
+                if_not_exists: _,
+                using: _,
+                with_options: _,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
                     // For now, create a B-Tree index on the first column

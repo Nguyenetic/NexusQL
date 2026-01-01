@@ -5,7 +5,7 @@ use crate::query::ast::*;
 use crate::types::Value;
 use crate::{NexusError, Result};
 use sqlparser::ast as sql_ast;
-use sqlparser::dialect::{keywords::Keyword, Dialect};
+use sqlparser::dialect::Dialect;
 use sqlparser::parser::Parser as SqlParser;
 
 /// NexusQL Custom SQL Dialect
@@ -180,11 +180,59 @@ impl QueryParser {
                     })
                     .collect();
 
+                // Extract USING clause (e.g., USING hnsw)
+                let using = create_index.using.as_ref().map(|ident| ident.value.clone());
+
+                // Extract WITH clause options (e.g., WITH (m = 16, ef_construction = 100))
+                let with_options: Vec<IndexOption> =
+                    create_index
+                        .with
+                        .iter()
+                        .filter_map(|expr| {
+                            if let sql_ast::Expr::BinaryOp {
+                                left,
+                                op: sql_ast::BinaryOperator::Eq,
+                                right,
+                            } = expr
+                            {
+                                if let sql_ast::Expr::Identifier(ident) = left.as_ref() {
+                                    let name = ident.value.clone();
+                                    let value = match right.as_ref() {
+                                        sql_ast::Expr::Value(sql_ast::Value::Number(n, _)) => {
+                                            if let Ok(i) = n.parse::<i64>() {
+                                                Value::Integer(i)
+                                            } else if let Ok(f) = n.parse::<f64>() {
+                                                Value::Float(f.into())
+                                            } else {
+                                                return None;
+                                            }
+                                        }
+                                        sql_ast::Expr::Value(
+                                            sql_ast::Value::SingleQuotedString(s),
+                                        )
+                                        | sql_ast::Expr::Value(
+                                            sql_ast::Value::DoubleQuotedString(s),
+                                        ) => Value::Text(s.clone()),
+                                        sql_ast::Expr::Value(sql_ast::Value::Boolean(b)) => {
+                                            Value::Boolean(*b)
+                                        }
+                                        _ => return None,
+                                    };
+                                    return Some(IndexOption { name, value });
+                                }
+                            }
+                            None
+                        })
+                        .collect();
+
                 Ok(Statement::CreateIndex {
                     name: index_name,
                     table,
                     columns: column_names,
                     unique: create_index.unique,
+                    if_not_exists: create_index.if_not_exists,
+                    using,
+                    with_options,
                 })
             }
 
@@ -888,6 +936,7 @@ mod tests {
                 table,
                 columns,
                 unique,
+                ..
             } => {
                 assert_eq!(name, "idx_user_email");
                 assert_eq!(table, "users");
@@ -908,6 +957,7 @@ mod tests {
                 table,
                 columns,
                 unique,
+                ..
             } => {
                 assert_eq!(name, "idx_user_email");
                 assert_eq!(table, "users");
@@ -930,6 +980,7 @@ mod tests {
                 table,
                 columns,
                 unique,
+                ..
             } => {
                 assert_eq!(name, "idx_user_name_email");
                 assert_eq!(table, "users");
