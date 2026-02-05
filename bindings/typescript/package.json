@@ -1,7 +1,7 @@
 {
   "name": "@nguyenetic/nexusql",
-  "version": "3.4.0",
-  "description": "AI-Native, PostgreSQL-compatible database with vector search, HNSW indexing, and full ACID compliance. All 298 tests passing. NEW: PRAGMA statement support for SQLite compatibility!",
+  "version": "3.5.0",
+  "description": "AI-Native, PostgreSQL-compatible database with vector search, HNSW indexing, and full ACID compliance. All 421 tests passing. NEW: Window Functions, CTEs, Subqueries, JOINs, GROUP BY/HAVING!",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
@@ -47,7 +47,13 @@
     "high-performance",
     "parameterized-queries",
     "sql-injection-prevention",
-    "security"
+    "security",
+    "window-functions",
+    "cte",
+    "subqueries",
+    "joins",
+    "group-by",
+    "analytics"
   ],
   "author": "John Nguyen <john@nexusql.io>",
   "license": "MIT",

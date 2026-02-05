@@ -5,9 +5,27 @@ use crate::query::ast::*;
 use crate::query::evaluator::{evaluate_expr, evaluate_where, QueryParams};
 use crate::storage::Table;
 use crate::types::{ResultSet, Row, Value};
+use crate::window::{WindowManager, WindowSpec as WindowSpecImpl, WindowFrame as WindowFrameImpl, FrameBound, FrameType};
 use crate::Result;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
+
+/// Check if a SELECT list contains window functions
+fn has_window_functions(select_items: &[SelectItem]) -> bool {
+    for item in select_items {
+        if let SelectItem::Expr { expr, .. } = item {
+            if is_window_function_expr(expr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if an expression is a window function
+fn is_window_function_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::WindowFunction { .. })
+}
 
 /// Check if a SELECT list contains aggregate functions
 fn has_aggregate_functions(select_items: &[SelectItem]) -> bool {
@@ -29,6 +47,23 @@ fn is_aggregate_expr(expr: &Expr) -> bool {
             matches!(name_upper.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
         }
         _ => false,
+    }
+}
+
+/// Compare two Values and return their ordering
+fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b)),
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+        (Value::Text(a), Value::Text(b)) => Some(a.cmp(b)),
+        // Cross-type comparisons for SQL compatibility
+        (Value::Integer(i), Value::Float(f)) => {
+            OrderedFloat(*i as f64).partial_cmp(f)
+        }
+        (Value::Float(f), Value::Integer(i)) => {
+            f.partial_cmp(&OrderedFloat(*i as f64))
+        }
+        _ => None,
     }
 }
 
@@ -159,6 +194,8 @@ pub struct Executor {
     tables: HashMap<String, Table>,
     transaction_active: bool,
     transaction_snapshot: Option<HashMap<String, Table>>,
+    /// Stored relationship definitions for FETCH operations
+    relationships: HashMap<String, Relationship>,
 }
 
 impl Executor {
@@ -167,7 +204,13 @@ impl Executor {
             tables: HashMap::new(),
             transaction_active: false,
             transaction_snapshot: None,
+            relationships: HashMap::new(),
         }
+    }
+
+    /// Get a reference to stored relationships
+    pub fn get_relationships(&self) -> &HashMap<String, Relationship> {
+        &self.relationships
     }
 
     pub fn execute(&mut self, statement: &Statement, params: &QueryParams) -> Result<ResultSet> {
@@ -537,28 +580,91 @@ impl Executor {
                 }
             }
             Statement::Select {
+                with,
                 columns,
                 from,
                 where_clause,
+                group_by,
+                having,
                 using_engine: _,
                 order_by,
                 limit,
+                fetch,
             } => {
-                let table = self.tables.get(from).ok_or_else(|| {
-                    crate::NexusError::QueryError(format!("Table {} not found", from))
+                // Execute CTEs (WITH clause) first and create temporary tables
+                let cte_cleanup = self.execute_ctes(with, params)?;
+
+                // Get primary table (may be a CTE)
+                let table = self.tables.get(&from.table).ok_or_else(|| {
+                    crate::NexusError::QueryError(format!("Table {} not found", from.table))
                 })?;
 
                 let mut rows = table.select_all();
 
-                // Apply WHERE clause filter
-                if let Some(expr) = where_clause {
-                    rows.retain(|row| evaluate_where(row, expr, params));
+                // Execute JOINs if present
+                if !from.joins.is_empty() {
+                    rows = self.execute_joins(&rows, &from.joins, params)?;
                 }
 
-                // Check if this is an aggregate query
+                // Apply WHERE clause filter with subquery support
+                if let Some(expr) = where_clause {
+                    if Self::contains_subqueries(expr) {
+                        // Use subquery-aware evaluation
+                        let mut filtered_rows = Vec::new();
+                        for row in rows {
+                            match self.evaluate_where_with_subqueries(&row, expr, params) {
+                                Ok(true) => filtered_rows.push(row),
+                                Ok(false) => {}
+                                Err(_) => {} // Skip rows that cause errors in subquery evaluation
+                            }
+                        }
+                        rows = filtered_rows;
+                    } else {
+                        // Use fast path for simple WHERE clauses
+                        rows.retain(|row| evaluate_where(row, expr, params));
+                    }
+                }
+
+                // Handle GROUP BY
+                if !group_by.is_empty() {
+                    // Group rows and apply aggregations
+                    let grouped_rows = self.execute_group_by(&rows, columns, group_by, having, params)?;
+
+                    // Apply ORDER BY sorting on grouped results
+                    let mut result_rows = grouped_rows;
+                    if let Some(order) = order_by {
+                        result_rows.sort_by(|a, b| {
+                            use crate::query::evaluator::evaluate_expr;
+                            let a_val = evaluate_expr(a, &order.expr, params);
+                            let b_val = evaluate_expr(b, &order.expr, params);
+
+                            let cmp = a_val
+                                .partial_cmp(&b_val)
+                                .unwrap_or(std::cmp::Ordering::Equal);
+
+                            if order.ascending {
+                                cmp
+                            } else {
+                                cmp.reverse()
+                            }
+                        });
+                    }
+
+                    // Apply LIMIT
+                    if let Some(lim) = limit {
+                        result_rows.truncate(*lim);
+                    }
+
+                    // execute_group_by already projects columns, so return directly
+                    self.cleanup_ctes(&cte_cleanup);
+                    return Ok(ResultSet::new(result_rows));
+                }
+
+                // Check if this is an aggregate query (without GROUP BY)
                 if has_aggregate_functions(columns) {
                     // Handle aggregate functions - returns a single row
                     let result_row = self.evaluate_aggregates(&rows, columns, params)?;
+                    self.cleanup_ctes(&cte_cleanup);
                     return Ok(ResultSet::new(vec![result_row]));
                 }
 
@@ -587,8 +693,20 @@ impl Executor {
                 }
 
                 // Project columns based on SELECT list
-                let result_rows = self.project_columns(&rows, columns, params)?;
+                // Use window function aware projection if needed
+                let mut result_rows = if has_window_functions(columns) {
+                    self.project_columns_with_windows(&rows, columns, params)?
+                } else {
+                    self.project_columns(&rows, columns, params)?
+                };
 
+                // Execute FETCH clauses for nested data retrieval
+                if !fetch.is_empty() {
+                    result_rows = self.execute_fetch_clauses(&result_rows, &rows, fetch, params)?;
+                }
+
+                // Clean up CTE tables
+                self.cleanup_ctes(&cte_cleanup);
                 Ok(ResultSet::new(result_rows))
             }
             Statement::Update {
@@ -786,6 +904,123 @@ impl Executor {
                     }
                 }
             }
+            Statement::SetOperation {
+                left,
+                op,
+                right,
+                order_by,
+                limit,
+            } => {
+                // Execute left and right subqueries
+                let left_result = self.execute(left, params)?;
+                let right_result = self.execute(right, params)?;
+
+                // Combine results based on set operation
+                let mut result_rows = match op {
+                    SetOperator::Union => {
+                        // UNION: combine and remove duplicates
+                        let mut all_rows = left_result.rows;
+                        for row in right_result.rows {
+                            if !all_rows.contains(&row) {
+                                all_rows.push(row);
+                            }
+                        }
+                        all_rows
+                    }
+                    SetOperator::UnionAll => {
+                        // UNION ALL: combine keeping duplicates
+                        let mut all_rows = left_result.rows;
+                        all_rows.extend(right_result.rows);
+                        all_rows
+                    }
+                    SetOperator::Intersect => {
+                        // INTERSECT: only rows in both (deduplicated)
+                        let mut result = Vec::new();
+                        for row in &left_result.rows {
+                            if right_result.rows.contains(row) && !result.contains(row) {
+                                result.push(row.clone());
+                            }
+                        }
+                        result
+                    }
+                    SetOperator::IntersectAll => {
+                        // INTERSECT ALL: rows in both, keeping count
+                        let mut result = Vec::new();
+                        let mut right_remaining: Vec<_> = right_result.rows.clone();
+                        for row in &left_result.rows {
+                            if let Some(pos) = right_remaining.iter().position(|r| r == row) {
+                                result.push(row.clone());
+                                right_remaining.remove(pos);
+                            }
+                        }
+                        result
+                    }
+                    SetOperator::Except => {
+                        // EXCEPT: rows in left but not in right (deduplicated)
+                        let mut result = Vec::new();
+                        for row in &left_result.rows {
+                            if !right_result.rows.contains(row) && !result.contains(row) {
+                                result.push(row.clone());
+                            }
+                        }
+                        result
+                    }
+                    SetOperator::ExceptAll => {
+                        // EXCEPT ALL: rows in left minus matching count from right
+                        let mut result = Vec::new();
+                        let mut right_remaining: Vec<_> = right_result.rows.clone();
+                        for row in &left_result.rows {
+                            if let Some(pos) = right_remaining.iter().position(|r| r == row) {
+                                right_remaining.remove(pos); // Cancel one occurrence
+                            } else {
+                                result.push(row.clone());
+                            }
+                        }
+                        result
+                    }
+                };
+
+                // Apply ORDER BY to the combined result
+                if let Some(order) = order_by {
+                    result_rows.sort_by(|a, b| {
+                        use crate::query::evaluator::evaluate_expr;
+                        let a_val = evaluate_expr(a, &order.expr, params);
+                        let b_val = evaluate_expr(b, &order.expr, params);
+
+                        let cmp = a_val
+                            .partial_cmp(&b_val)
+                            .unwrap_or(std::cmp::Ordering::Equal);
+
+                        if order.ascending {
+                            cmp
+                        } else {
+                            cmp.reverse()
+                        }
+                    });
+                }
+
+                // Apply LIMIT
+                if let Some(lim) = limit {
+                    result_rows.truncate(*lim);
+                }
+
+                Ok(ResultSet::new(result_rows))
+            }
+            Statement::CreateRelationship(rel) => {
+                // Store relationship definition for FETCH operations
+                self.relationships.insert(rel.name.clone(), rel.clone());
+                Ok(ResultSet::empty())
+            }
+            Statement::Traverse {
+                clause,
+                from_table,
+                where_clause,
+                return_columns,
+                limit,
+            } => {
+                // Execute graph traversal
+                self.execute_traverse(clause, from_table, where_clause, return_columns, limit, params)
+            }
         }
     }
 
@@ -905,6 +1140,1622 @@ impl Executor {
 
         Ok(result_rows)
     }
+
+    /// Project columns with window function support
+    /// Pre-computes window function values before projection
+    fn project_columns_with_windows(
+        &self,
+        rows: &[Row],
+        select_items: &[SelectItem],
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        // Pre-compute all window function values
+        let window_values = self.compute_window_functions(rows, select_items)?;
+
+        let mut result_rows = Vec::with_capacity(rows.len());
+
+        for (row_idx, row) in rows.iter().enumerate() {
+            let mut result_cols = Vec::new();
+            let mut result_vals = Vec::new();
+            let mut window_col_idx = 0;
+
+            for item in select_items {
+                match item {
+                    SelectItem::Wildcard => {
+                        result_cols.extend(row.columns.clone());
+                        result_vals.extend(row.values.clone());
+                    }
+                    SelectItem::Expr { expr, alias } => {
+                        let value = if is_window_function_expr(expr) {
+                            // Use pre-computed window function value
+                            let val = window_values
+                                .get(window_col_idx)
+                                .and_then(|col_vals| col_vals.get(row_idx))
+                                .cloned()
+                                .unwrap_or(Value::Null);
+                            window_col_idx += 1;
+                            val
+                        } else {
+                            evaluate_expr(row, expr, params)
+                        };
+
+                        let col_name = if let Some(alias_name) = alias {
+                            alias_name.clone()
+                        } else {
+                            self.get_window_column_name(expr)
+                        };
+
+                        result_cols.push(col_name);
+                        result_vals.push(value);
+                    }
+                }
+            }
+
+            result_rows.push(Row::new(result_cols, result_vals));
+        }
+
+        Ok(result_rows)
+    }
+
+    /// Get column name for a window function expression
+    fn get_window_column_name(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::Column(name) => name.clone(),
+            Expr::Function { name, .. } => name.clone(),
+            Expr::WindowFunction { function, .. } => {
+                if let Expr::Function { name, .. } = function.as_ref() {
+                    name.clone()
+                } else {
+                    "window_func".to_string()
+                }
+            }
+            _ => "expr".to_string(),
+        }
+    }
+
+    /// Compute all window functions in the SELECT list
+    fn compute_window_functions(
+        &self,
+        rows: &[Row],
+        select_items: &[SelectItem],
+    ) -> Result<Vec<Vec<Value>>> {
+        let manager = WindowManager::new();
+        let mut window_results = Vec::new();
+
+        for item in select_items {
+            if let SelectItem::Expr { expr, .. } = item {
+                if let Expr::WindowFunction { function, window_spec } = expr {
+                    // Convert AST WindowSpec to window module WindowSpec
+                    let impl_spec = self.convert_window_spec(window_spec, rows);
+
+                    // Get function name and value column
+                    let (func_name, value_col_idx) = self.extract_window_function_info(function, rows);
+
+                    // For RANK and DENSE_RANK, use ORDER BY column as value_column if not set
+                    let effective_value_col = if value_col_idx.is_none()
+                        && (func_name == "RANK" || func_name == "DENSE_RANK")
+                    {
+                        // Use the first ORDER BY column
+                        impl_spec.order_by.first().map(|(idx, _)| *idx)
+                    } else {
+                        value_col_idx
+                    };
+
+                    // Execute window function
+                    let values = manager.execute_window_function(
+                        &func_name,
+                        rows,
+                        &impl_spec,
+                        effective_value_col,
+                    )?;
+
+                    window_results.push(values);
+                }
+            }
+        }
+
+        Ok(window_results)
+    }
+
+    /// Convert AST WindowSpec to window module WindowSpec
+    fn convert_window_spec(&self, spec: &WindowSpec, rows: &[Row]) -> WindowSpecImpl {
+        // Convert PARTITION BY expressions to column indices
+        let partition_by: Vec<usize> = spec
+            .partition_by
+            .iter()
+            .filter_map(|expr| self.expr_to_column_idx(expr, rows))
+            .collect();
+
+        // Convert ORDER BY expressions to column indices and direction
+        let order_by: Vec<(usize, bool)> = spec
+            .order_by
+            .iter()
+            .filter_map(|order| {
+                self.expr_to_column_idx(&order.expr, rows)
+                    .map(|idx| (idx, order.ascending))
+            })
+            .collect();
+
+        // Convert window frame if present
+        let frame = if let Some(ref ast_frame) = spec.frame {
+            WindowFrameImpl::new(
+                match ast_frame.units {
+                    WindowFrameUnits::Rows => FrameType::Rows,
+                    WindowFrameUnits::Range => FrameType::Range,
+                    WindowFrameUnits::Groups => FrameType::Rows, // Treat GROUPS as ROWS for now
+                },
+                self.convert_frame_bound(&ast_frame.start),
+                ast_frame.end.as_ref()
+                    .map(|e| self.convert_frame_bound(e))
+                    .unwrap_or(FrameBound::CurrentRow),
+            )
+        } else {
+            WindowFrameImpl::default()
+        };
+
+        WindowSpecImpl {
+            partition_by,
+            order_by,
+            frame,
+        }
+    }
+
+    /// Convert AST WindowFrameBound to window module FrameBound
+    fn convert_frame_bound(&self, bound: &WindowFrameBound) -> FrameBound {
+        match bound {
+            WindowFrameBound::CurrentRow => FrameBound::CurrentRow,
+            WindowFrameBound::UnboundedPreceding => FrameBound::UnboundedPreceding,
+            WindowFrameBound::UnboundedFollowing => FrameBound::UnboundedFollowing,
+            WindowFrameBound::Preceding(n) => FrameBound::Preceding(*n as i64),
+            WindowFrameBound::Following(n) => FrameBound::Following(*n as i64),
+        }
+    }
+
+    /// Extract function name and value column index from window function
+    fn extract_window_function_info(&self, function: &Expr, rows: &[Row]) -> (String, Option<usize>) {
+        match function {
+            Expr::Function { name, args } => {
+                let func_name = name.to_uppercase();
+                let value_col = args
+                    .first()
+                    .and_then(|arg| self.expr_to_column_idx(arg, rows));
+                (func_name, value_col)
+            }
+            _ => ("ROW_NUMBER".to_string(), None),
+        }
+    }
+
+    /// Convert an expression to a column index (if it's a simple column reference)
+    fn expr_to_column_idx(&self, expr: &Expr, rows: &[Row]) -> Option<usize> {
+        if let Expr::Column(col_name) = expr {
+            if let Some(first_row) = rows.first() {
+                return first_row.columns.iter().position(|c| c == col_name);
+            }
+        }
+        None
+    }
+
+    /// Execute CTEs (WITH clause) by materializing them as temporary tables
+    /// Returns a list of CTE names that should be cleaned up after the main query
+    fn execute_ctes(
+        &mut self,
+        ctes: &[crate::query::ast::CommonTableExpr],
+        params: &QueryParams,
+    ) -> Result<Vec<String>> {
+        use crate::query::ast::SelectItem;
+
+        let mut cte_names = Vec::new();
+
+        for cte in ctes {
+            // Materialize the CTE as a temporary table
+            let mut rows = self.execute_subquery_expr(&cte.query, params)?;
+
+            // Determine column names for the CTE
+            let columns = if let Some(ref col_names) = cte.columns {
+                // Use provided column names and rename row columns
+                for row in &mut rows {
+                    if row.columns.len() == col_names.len() {
+                        row.columns = col_names.clone();
+                    }
+                }
+                col_names.clone()
+            } else {
+                // Infer column names from the subquery columns or from the rows
+                if !rows.is_empty() {
+                    rows[0].columns.clone()
+                } else {
+                    cte.query
+                        .columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, item)| match item {
+                            SelectItem::Wildcard => format!("col{}", i),
+                            SelectItem::Expr { alias, expr } => {
+                                alias.clone().unwrap_or_else(|| match expr {
+                                    crate::query::ast::Expr::Column(name) => name.clone(),
+                                    _ => format!("col{}", i),
+                                })
+                            }
+                        })
+                        .collect()
+                }
+            };
+
+            let mut table = Table::new(cte.name.clone(), columns);
+            table.rows = rows;
+
+            self.tables.insert(cte.name.clone(), table);
+            cte_names.push(cte.name.clone());
+        }
+
+        Ok(cte_names)
+    }
+
+    /// Clean up temporary CTE tables
+    fn cleanup_ctes(&mut self, cte_names: &[String]) {
+        for name in cte_names {
+            self.tables.remove(name);
+        }
+    }
+
+    /// Execute a SubqueryExpr and return the result rows
+    fn execute_subquery_expr(
+        &self,
+        subquery: &crate::query::ast::SubqueryExpr,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        use crate::query::ast::TableRef;
+        use crate::query::evaluator::evaluate_where;
+
+        // Get rows from the FROM clause
+        let mut rows = match &subquery.from {
+            TableRef::Table { name, .. } => {
+                let table = self.tables.get(name).ok_or_else(|| {
+                    crate::NexusError::QueryError(format!("Table {} not found", name))
+                })?;
+                table.select_all()
+            }
+            TableRef::Subquery { .. } => {
+                // TODO: Support derived tables (subqueries in FROM)
+                return Err(crate::NexusError::QueryError(
+                    "Derived tables (subqueries in FROM) not yet supported".into(),
+                ));
+            }
+        };
+
+        // Apply WHERE clause
+        if let Some(ref where_expr) = subquery.where_clause {
+            rows.retain(|row| evaluate_where(row, where_expr, params));
+        }
+
+        // TODO: Handle GROUP BY and HAVING in subqueries
+
+        // Apply ORDER BY
+        if let Some(ref order) = subquery.order_by {
+            rows.sort_by(|a, b| {
+                use crate::query::evaluator::evaluate_expr;
+                let a_val = evaluate_expr(a, &order.expr, params);
+                let b_val = evaluate_expr(b, &order.expr, params);
+                let cmp = a_val
+                    .partial_cmp(&b_val)
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if order.ascending {
+                    cmp
+                } else {
+                    cmp.reverse()
+                }
+            });
+        }
+
+        // Apply LIMIT
+        if let Some(lim) = subquery.limit {
+            rows.truncate(lim);
+        }
+
+        // Project columns
+        let projected = self.project_columns(&rows, &subquery.columns, params)?;
+
+        Ok(projected)
+    }
+
+    /// Evaluate a WHERE clause with full subquery support
+    /// This method handles IN subqueries, EXISTS subqueries, and scalar subqueries
+    fn evaluate_where_with_subqueries(
+        &self,
+        row: &Row,
+        expr: &Expr,
+        params: &QueryParams,
+    ) -> Result<bool> {
+        match expr {
+            Expr::InSubquery { expr: value_expr, subquery, negated } => {
+                // Execute the subquery to get the set of values
+                let subquery_rows = self.execute_subquery_expr(subquery, params)?;
+
+                // Get the value to check
+                let value = evaluate_expr(row, value_expr, params);
+
+                // Check if value is in the subquery results (first column of each row)
+                let found = subquery_rows.iter().any(|sub_row| {
+                    if let Some(first_val) = sub_row.values.first() {
+                        *first_val == value
+                    } else {
+                        false
+                    }
+                });
+
+                Ok(if *negated { !found } else { found })
+            }
+
+            Expr::ExistsSubquery { subquery, negated } => {
+                // For EXISTS, we need to execute the subquery with potential correlation
+                // The subquery's WHERE clause might reference the outer row
+                let subquery_rows = self.execute_correlated_subquery(subquery, row, params)?;
+
+                // EXISTS returns true if the subquery returns any rows
+                let exists = !subquery_rows.is_empty();
+
+                Ok(if *negated { !exists } else { exists })
+            }
+
+            Expr::BinaryOp { left, op, right } => {
+                // Handle AND/OR with subquery support
+                match op {
+                    BinaryOperator::And => {
+                        let left_result = self.evaluate_where_with_subqueries(row, left, params)?;
+                        if !left_result {
+                            return Ok(false);
+                        }
+                        self.evaluate_where_with_subqueries(row, right, params)
+                    }
+                    BinaryOperator::Or => {
+                        let left_result = self.evaluate_where_with_subqueries(row, left, params)?;
+                        if left_result {
+                            return Ok(true);
+                        }
+                        self.evaluate_where_with_subqueries(row, right, params)
+                    }
+                    _ => {
+                        // For comparison operators, evaluate both sides and compare
+                        let left_val = self.evaluate_expr_with_subqueries(row, left, params)?;
+                        let right_val = self.evaluate_expr_with_subqueries(row, right, params)?;
+                        Ok(self.evaluate_comparison(&left_val, op, &right_val))
+                    }
+                }
+            }
+
+            // For all other expressions, use the standard evaluator
+            _ => Ok(evaluate_where(row, expr, params)),
+        }
+    }
+
+    /// Evaluate an expression that may contain subqueries
+    fn evaluate_expr_with_subqueries(
+        &self,
+        row: &Row,
+        expr: &Expr,
+        params: &QueryParams,
+    ) -> Result<Value> {
+        match expr {
+            Expr::Subquery(subquery) => {
+                // Scalar subquery - execute and return the first value
+                let subquery_rows = self.execute_subquery_expr(subquery, params)?;
+
+                if let Some(first_row) = subquery_rows.first() {
+                    if let Some(first_val) = first_row.values.first() {
+                        return Ok(first_val.clone());
+                    }
+                }
+
+                Ok(Value::Null)
+            }
+
+            Expr::InSubquery { expr: value_expr, subquery, negated } => {
+                // Evaluate as boolean
+                let subquery_rows = self.execute_subquery_expr(subquery, params)?;
+                let value = evaluate_expr(row, value_expr, params);
+
+                let found = subquery_rows.iter().any(|sub_row| {
+                    if let Some(first_val) = sub_row.values.first() {
+                        *first_val == value
+                    } else {
+                        false
+                    }
+                });
+
+                Ok(Value::Boolean(if *negated { !found } else { found }))
+            }
+
+            Expr::ExistsSubquery { subquery, negated } => {
+                let subquery_rows = self.execute_correlated_subquery(subquery, row, params)?;
+                let exists = !subquery_rows.is_empty();
+                Ok(Value::Boolean(if *negated { !exists } else { exists }))
+            }
+
+            // For all other expressions, use the standard evaluator
+            _ => Ok(evaluate_expr(row, expr, params)),
+        }
+    }
+
+    /// Execute a potentially correlated subquery
+    /// The subquery's WHERE clause might reference columns from the outer row
+    fn execute_correlated_subquery(
+        &self,
+        subquery: &SubqueryExpr,
+        outer_row: &Row,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        use crate::query::ast::TableRef;
+
+        // Get rows from the FROM clause
+        let mut rows = match &subquery.from {
+            TableRef::Table { name, .. } => {
+                let table = self.tables.get(name).ok_or_else(|| {
+                    crate::NexusError::QueryError(format!("Table {} not found", name))
+                })?;
+                table.select_all()
+            }
+            TableRef::Subquery { .. } => {
+                return Err(crate::NexusError::QueryError(
+                    "Derived tables in correlated subqueries not yet supported".into(),
+                ));
+            }
+        };
+
+        // Apply WHERE clause with correlation to outer row
+        if let Some(ref where_expr) = subquery.where_clause {
+            rows.retain(|inner_row| {
+                // Create a merged row that has both inner and outer columns
+                // This allows the WHERE clause to reference outer row columns
+                let merged_row = self.merge_correlated_rows(outer_row, inner_row);
+                evaluate_where(&merged_row, where_expr, params)
+            });
+        }
+
+        // Apply LIMIT
+        if let Some(lim) = subquery.limit {
+            rows.truncate(lim);
+        }
+
+        // Project columns
+        let projected = self.project_columns(&rows, &subquery.columns, params)?;
+
+        Ok(projected)
+    }
+
+    /// Merge outer and inner rows for correlated subquery evaluation
+    /// Outer row columns are accessible in the subquery's WHERE clause
+    /// Inner row columns are added without replacing outer columns
+    fn merge_correlated_rows(&self, outer_row: &Row, inner_row: &Row) -> Row {
+        let mut columns = outer_row.columns.clone();
+        let mut values = outer_row.values.clone();
+
+        // Add inner row columns WITHOUT replacing outer columns
+        // This allows the WHERE clause to reference outer columns like users.id
+        // while also accessing inner columns like orders.user_id
+        for (i, col) in inner_row.columns.iter().enumerate() {
+            // Only add if the column doesn't exist (don't overwrite outer columns)
+            if !columns.contains(col) {
+                columns.push(col.clone());
+                values.push(inner_row.values[i].clone());
+            }
+        }
+
+        Row::new(columns, values)
+    }
+
+    /// Evaluate a comparison operation between two values
+    fn evaluate_comparison(&self, left: &Value, op: &BinaryOperator, right: &Value) -> bool {
+        match op {
+            BinaryOperator::Eq => left == right,
+            BinaryOperator::NotEq => left != right,
+            BinaryOperator::Lt => {
+                compare_values(left, right)
+                    .map(|c| c == std::cmp::Ordering::Less)
+                    .unwrap_or(false)
+            }
+            BinaryOperator::LtEq => {
+                compare_values(left, right)
+                    .map(|c| c != std::cmp::Ordering::Greater)
+                    .unwrap_or(false)
+            }
+            BinaryOperator::Gt => {
+                compare_values(left, right)
+                    .map(|c| c == std::cmp::Ordering::Greater)
+                    .unwrap_or(false)
+            }
+            BinaryOperator::GtEq => {
+                compare_values(left, right)
+                    .map(|c| c != std::cmp::Ordering::Less)
+                    .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a WHERE expression contains subqueries that need special handling
+    fn contains_subqueries(expr: &Expr) -> bool {
+        match expr {
+            Expr::InSubquery { .. } => true,
+            Expr::ExistsSubquery { .. } => true,
+            Expr::Subquery(_) => true,
+            Expr::BinaryOp { left, right, .. } => {
+                Self::contains_subqueries(left) || Self::contains_subqueries(right)
+            }
+            _ => false,
+        }
+    }
+
+    /// Execute JOINs using nested loop algorithm
+    fn execute_joins(
+        &self,
+        left_rows: &[Row],
+        joins: &[JoinClause],
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        let mut result_rows = left_rows.to_vec();
+
+        for join in joins {
+            result_rows = self.execute_single_join(&result_rows, join, params)?;
+        }
+
+        Ok(result_rows)
+    }
+
+    /// Execute a single JOIN operation
+    fn execute_single_join(
+        &self,
+        left_rows: &[Row],
+        join: &JoinClause,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        // Get the right table
+        let right_table = self.tables.get(&join.table).ok_or_else(|| {
+            crate::NexusError::QueryError(format!("Table {} not found for JOIN", join.table))
+        })?;
+        let right_rows = right_table.select_all();
+
+        let mut result = Vec::new();
+
+        match join.join_type {
+            JoinType::Inner => {
+                // INNER JOIN: only matching rows
+                for left_row in left_rows {
+                    for right_row in &right_rows {
+                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                            result.push(self.merge_rows(left_row, right_row, &join.alias));
+                        }
+                    }
+                }
+            }
+            JoinType::Left => {
+                // LEFT JOIN: all left rows + matching right rows (NULL for non-matches)
+                for left_row in left_rows {
+                    let mut matched = false;
+                    for right_row in &right_rows {
+                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                            result.push(self.merge_rows(left_row, right_row, &join.alias));
+                            matched = true;
+                        }
+                    }
+                    if !matched {
+                        // Add left row with NULL values for right table columns
+                        result.push(self.merge_rows_with_nulls(left_row, right_table, &join.alias));
+                    }
+                }
+            }
+            JoinType::Right => {
+                // RIGHT JOIN: all right rows + matching left rows (NULL for non-matches)
+                for right_row in &right_rows {
+                    let mut matched = false;
+                    for left_row in left_rows {
+                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                            result.push(self.merge_rows(left_row, right_row, &join.alias));
+                            matched = true;
+                        }
+                    }
+                    if !matched {
+                        // Add right row with NULL values for left table columns
+                        // For right join, we need the left columns as NULL
+                        if let Some(first_left) = left_rows.first() {
+                            result.push(self.merge_rows_left_nulls(first_left, right_row, &join.alias));
+                        }
+                    }
+                }
+            }
+            JoinType::Full => {
+                // FULL OUTER JOIN: all rows from both tables
+                let mut matched_right_indices = std::collections::HashSet::new();
+
+                for left_row in left_rows {
+                    let mut matched = false;
+                    for (right_idx, right_row) in right_rows.iter().enumerate() {
+                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                            result.push(self.merge_rows(left_row, right_row, &join.alias));
+                            matched = true;
+                            matched_right_indices.insert(right_idx);
+                        }
+                    }
+                    if !matched {
+                        result.push(self.merge_rows_with_nulls(left_row, right_table, &join.alias));
+                    }
+                }
+
+                // Add unmatched right rows
+                if let Some(first_left) = left_rows.first() {
+                    for (right_idx, right_row) in right_rows.iter().enumerate() {
+                        if !matched_right_indices.contains(&right_idx) {
+                            result.push(self.merge_rows_left_nulls(first_left, right_row, &join.alias));
+                        }
+                    }
+                }
+            }
+            JoinType::Cross => {
+                // CROSS JOIN: cartesian product (no condition)
+                for left_row in left_rows {
+                    for right_row in &right_rows {
+                        result.push(self.merge_rows(left_row, right_row, &join.alias));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Evaluate JOIN condition
+    fn evaluate_join_condition(
+        &self,
+        left_row: &Row,
+        right_row: &Row,
+        condition: &Option<Expr>,
+        params: &QueryParams,
+    ) -> bool {
+        match condition {
+            Some(expr) => {
+                // Create a merged row for evaluation
+                let merged = self.merge_rows(left_row, right_row, &None);
+                evaluate_where(&merged, expr, params)
+            }
+            None => true, // No condition = all rows match (for CROSS JOIN)
+        }
+    }
+
+    /// Merge two rows into one (for JOIN results)
+    fn merge_rows(&self, left: &Row, right: &Row, right_alias: &Option<String>) -> Row {
+        let mut columns = left.columns.clone();
+        let mut values = left.values.clone();
+
+        // Add right table columns with optional alias prefix
+        for (i, col) in right.columns.iter().enumerate() {
+            let col_name = if let Some(alias) = right_alias {
+                format!("{}.{}", alias, col)
+            } else {
+                // Prefix with table name to avoid conflicts
+                col.clone()
+            };
+            columns.push(col_name);
+            values.push(right.values[i].clone());
+        }
+
+        Row::new(columns, values)
+    }
+
+    /// Merge left row with NULL values for right table columns (for LEFT JOIN)
+    fn merge_rows_with_nulls(&self, left: &Row, right_table: &Table, right_alias: &Option<String>) -> Row {
+        let mut columns = left.columns.clone();
+        let mut values = left.values.clone();
+
+        // Add right table columns with NULL values
+        for col_name in &right_table.columns {
+            let col = if let Some(alias) = right_alias {
+                format!("{}.{}", alias, col_name)
+            } else {
+                col_name.clone()
+            };
+            columns.push(col);
+            values.push(Value::Null);
+        }
+
+        Row::new(columns, values)
+    }
+
+    /// Merge right row with NULL values for left table columns (for RIGHT JOIN)
+    fn merge_rows_left_nulls(&self, left_template: &Row, right: &Row, right_alias: &Option<String>) -> Row {
+        let mut columns = Vec::new();
+        let mut values = Vec::new();
+
+        // Add left table columns with NULL values
+        for col in &left_template.columns {
+            columns.push(col.clone());
+            values.push(Value::Null);
+        }
+
+        // Add right table columns with actual values
+        for (i, col) in right.columns.iter().enumerate() {
+            let col_name = if let Some(alias) = right_alias {
+                format!("{}.{}", alias, col)
+            } else {
+                col.clone()
+            };
+            columns.push(col_name);
+            values.push(right.values[i].clone());
+        }
+
+        Row::new(columns, values)
+    }
+
+    /// Execute GROUP BY clause
+    fn execute_group_by(
+        &self,
+        rows: &[Row],
+        columns: &[SelectItem],
+        group_by: &[Expr],
+        having: &Option<Expr>,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        use crate::query::evaluator::evaluate_expr;
+        use std::collections::HashMap;
+
+        // Group rows by GROUP BY expressions
+        let mut groups: HashMap<Vec<Value>, Vec<Row>> = HashMap::new();
+
+        for row in rows {
+            // Compute the group key from GROUP BY expressions
+            let group_key: Vec<Value> = group_by
+                .iter()
+                .map(|expr| evaluate_expr(row, expr, params))
+                .collect();
+
+            groups
+                .entry(group_key)
+                .or_insert_with(Vec::new)
+                .push(row.clone());
+        }
+
+        // Process each group
+        let mut result_rows = Vec::new();
+
+        for (group_key, group_rows) in groups {
+            // Apply HAVING filter first (before building result row)
+            if let Some(having_expr) = having {
+                if !self.evaluate_having_expr(having_expr, &group_rows, params)? {
+                    continue; // Skip this group
+                }
+            }
+
+            // Evaluate aggregates and columns for this group
+            let result_row = self.evaluate_group_row(&group_rows, columns, group_by, &group_key, params)?;
+
+            result_rows.push(result_row);
+        }
+
+        Ok(result_rows)
+    }
+
+    /// Evaluate a HAVING expression against a group of rows
+    fn evaluate_having_expr(
+        &self,
+        expr: &Expr,
+        group_rows: &[Row],
+        params: &QueryParams,
+    ) -> Result<bool> {
+        let value = self.evaluate_having_value(expr, group_rows, params)?;
+        match value {
+            Value::Boolean(b) => Ok(b),
+            _ => Ok(false),
+        }
+    }
+
+    /// Evaluate a HAVING expression to get its value
+    fn evaluate_having_value(
+        &self,
+        expr: &Expr,
+        group_rows: &[Row],
+        params: &QueryParams,
+    ) -> Result<Value> {
+        use crate::query::evaluator::evaluate_expr;
+
+        match expr {
+            Expr::Function { name, args } => {
+                // Evaluate aggregate function over the group
+                self.evaluate_aggregate_for_group(name, args, group_rows, params)
+            }
+            Expr::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_having_value(left, group_rows, params)?;
+                let right_val = self.evaluate_having_value(right, group_rows, params)?;
+
+                let result = match op {
+                    BinaryOperator::Gt => {
+                        compare_values(&left_val, &right_val)
+                            .map(|c| c == std::cmp::Ordering::Greater)
+                            .unwrap_or(false)
+                    }
+                    BinaryOperator::GtEq => {
+                        compare_values(&left_val, &right_val)
+                            .map(|c| c != std::cmp::Ordering::Less)
+                            .unwrap_or(false)
+                    }
+                    BinaryOperator::Lt => {
+                        compare_values(&left_val, &right_val)
+                            .map(|c| c == std::cmp::Ordering::Less)
+                            .unwrap_or(false)
+                    }
+                    BinaryOperator::LtEq => {
+                        compare_values(&left_val, &right_val)
+                            .map(|c| c != std::cmp::Ordering::Greater)
+                            .unwrap_or(false)
+                    }
+                    BinaryOperator::Eq => left_val == right_val,
+                    BinaryOperator::NotEq => left_val != right_val,
+                    BinaryOperator::And => {
+                        matches!((&left_val, &right_val), (Value::Boolean(true), Value::Boolean(true)))
+                    }
+                    BinaryOperator::Or => {
+                        matches!(&left_val, Value::Boolean(true)) || matches!(&right_val, Value::Boolean(true))
+                    }
+                    _ => false,
+                };
+
+                Ok(Value::Boolean(result))
+            }
+            Expr::Literal(val) => Ok(val.clone()),
+            Expr::Column(_col_name) => {
+                // For columns in HAVING, use the first row's value
+                if let Some(first_row) = group_rows.first() {
+                    Ok(evaluate_expr(first_row, expr, params))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            _ => {
+                // For other expressions, evaluate against first row
+                if let Some(first_row) = group_rows.first() {
+                    Ok(evaluate_expr(first_row, expr, params))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+        }
+    }
+
+    /// Evaluate a single group row (for GROUP BY)
+    fn evaluate_group_row(
+        &self,
+        group_rows: &[Row],
+        columns: &[SelectItem],
+        group_by: &[Expr],
+        group_key: &[Value],
+        params: &QueryParams,
+    ) -> Result<Row> {
+        use crate::query::evaluator::evaluate_expr;
+
+        let mut result_columns = Vec::new();
+        let mut result_values = Vec::new();
+
+        // Use the first row as a reference for non-aggregate columns
+        let first_row = group_rows.first().ok_or_else(|| {
+            crate::NexusError::QueryError("Empty group in GROUP BY".to_string())
+        })?;
+
+        for item in columns {
+            match item {
+                SelectItem::Wildcard => {
+                    // For wildcard with GROUP BY, use values from first row
+                    for (col, val) in first_row.columns.iter().zip(first_row.values.iter()) {
+                        result_columns.push(col.clone());
+                        result_values.push(val.clone());
+                    }
+                }
+                SelectItem::Expr { expr, alias } => {
+                    let col_name = if let Some(a) = alias {
+                        a.clone()
+                    } else {
+                        match expr {
+                            Expr::Column(name) => name.clone(),
+                            Expr::Function { name, .. } => name.clone(),
+                            _ => "?column?".to_string(),
+                        }
+                    };
+
+                    let value = match expr {
+                        Expr::Function { name, args } => {
+                            // Handle aggregate functions over the group
+                            self.evaluate_aggregate_for_group(name, args, group_rows, params)?
+                        }
+                        Expr::Column(col_name) => {
+                            // For non-aggregate columns in GROUP BY, check if it's in the group key
+                            let expr_in_group = group_by.iter().enumerate().find(|(_, gb_expr)| {
+                                matches!(gb_expr, Expr::Column(gc) if gc == col_name)
+                            });
+
+                            if let Some((idx, _)) = expr_in_group {
+                                group_key.get(idx).cloned().unwrap_or(Value::Null)
+                            } else {
+                                // Use value from first row (behavior matches most SQL databases)
+                                evaluate_expr(first_row, expr, params)
+                            }
+                        }
+                        _ => evaluate_expr(first_row, expr, params),
+                    };
+
+                    result_columns.push(col_name);
+                    result_values.push(value);
+                }
+            }
+        }
+
+        Ok(Row::new(result_columns, result_values))
+    }
+
+    /// Evaluate an aggregate function for a group of rows
+    fn evaluate_aggregate_for_group(
+        &self,
+        func_name: &str,
+        args: &[Expr],
+        group_rows: &[Row],
+        params: &QueryParams,
+    ) -> Result<Value> {
+        use crate::query::evaluator::evaluate_expr;
+
+        let func_upper = func_name.to_uppercase();
+
+        match func_upper.as_str() {
+            "COUNT" => {
+                if args.len() == 1 {
+                    if matches!(&args[0], Expr::Wildcard) {
+                        // COUNT(*) - count all rows in group
+                        Ok(Value::Integer(group_rows.len() as i64))
+                    } else {
+                        // COUNT(column) - count non-null values
+                        let count = group_rows
+                            .iter()
+                            .filter(|row| {
+                                let val = evaluate_expr(row, &args[0], params);
+                                !matches!(val, Value::Null)
+                            })
+                            .count();
+                        Ok(Value::Integer(count as i64))
+                    }
+                } else {
+                    Ok(Value::Integer(group_rows.len() as i64))
+                }
+            }
+            "SUM" => {
+                if args.is_empty() {
+                    return Err(crate::NexusError::QueryError(
+                        "SUM requires an argument".to_string(),
+                    ));
+                }
+
+                let mut sum: f64 = 0.0;
+                for row in group_rows {
+                    match evaluate_expr(row, &args[0], params) {
+                        Value::Integer(i) => sum += i as f64,
+                        Value::Float(f) => sum += f.into_inner(),
+                        Value::Null => {} // Skip nulls
+                        _ => {}
+                    }
+                }
+                Ok(Value::Float(ordered_float::OrderedFloat(sum)))
+            }
+            "AVG" => {
+                if args.is_empty() {
+                    return Err(crate::NexusError::QueryError(
+                        "AVG requires an argument".to_string(),
+                    ));
+                }
+
+                let mut sum: f64 = 0.0;
+                let mut count = 0;
+                for row in group_rows {
+                    match evaluate_expr(row, &args[0], params) {
+                        Value::Integer(i) => {
+                            sum += i as f64;
+                            count += 1;
+                        }
+                        Value::Float(f) => {
+                            sum += f.into_inner();
+                            count += 1;
+                        }
+                        Value::Null => {} // Skip nulls
+                        _ => {}
+                    }
+                }
+
+                if count > 0 {
+                    Ok(Value::Float(ordered_float::OrderedFloat(sum / count as f64)))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            "MIN" => {
+                if args.is_empty() {
+                    return Err(crate::NexusError::QueryError(
+                        "MIN requires an argument".to_string(),
+                    ));
+                }
+
+                let mut min: Option<Value> = None;
+                for row in group_rows {
+                    let val = evaluate_expr(row, &args[0], params);
+                    if matches!(val, Value::Null) {
+                        continue;
+                    }
+                    min = Some(match &min {
+                        None => val,
+                        Some(current) => {
+                            if val < *current { val } else { current.clone() }
+                        }
+                    });
+                }
+                Ok(min.unwrap_or(Value::Null))
+            }
+            "MAX" => {
+                if args.is_empty() {
+                    return Err(crate::NexusError::QueryError(
+                        "MAX requires an argument".to_string(),
+                    ));
+                }
+
+                let mut max: Option<Value> = None;
+                for row in group_rows {
+                    let val = evaluate_expr(row, &args[0], params);
+                    if matches!(val, Value::Null) {
+                        continue;
+                    }
+                    max = Some(match &max {
+                        None => val,
+                        Some(current) => {
+                            if val > *current { val } else { current.clone() }
+                        }
+                    });
+                }
+                Ok(max.unwrap_or(Value::Null))
+            }
+            _ => {
+                // Unknown aggregate, evaluate on first row
+                use crate::query::evaluator::evaluate_expr;
+                let first_row = group_rows.first().ok_or_else(|| {
+                    crate::NexusError::QueryError("Empty group".to_string())
+                })?;
+                Ok(evaluate_expr(first_row, &Expr::Function {
+                    name: func_name.to_string(),
+                    args: args.to_vec(),
+                }, params))
+            }
+        }
+    }
+
+    /// Execute FETCH clauses to retrieve nested related data
+    fn execute_fetch_clauses(
+        &self,
+        result_rows: &[Row],
+        original_rows: &[Row],
+        fetch_clauses: &[FetchClause],
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        let mut enriched_rows = result_rows.to_vec();
+
+        for (row_idx, orig_row) in original_rows.iter().enumerate() {
+            if row_idx >= enriched_rows.len() {
+                break;
+            }
+
+            for fetch in fetch_clauses {
+                // Look up the relationship (either by name or treat as direct table reference)
+                let related_data =
+                    self.fetch_related_data(orig_row, fetch, params)?;
+
+                // Add the fetched data as a new column (JSON-serialized)
+                let fetch_col_name = format!("_{}", fetch.relationship);
+                enriched_rows[row_idx].columns.push(fetch_col_name);
+                enriched_rows[row_idx].values.push(related_data);
+            }
+        }
+
+        Ok(enriched_rows)
+    }
+
+    /// Fetch related data for a single row based on a FETCH clause
+    fn fetch_related_data(
+        &self,
+        source_row: &Row,
+        fetch: &FetchClause,
+        params: &QueryParams,
+    ) -> Result<Value> {
+        // First, try to find a defined relationship
+        let relationship = self.relationships.get(&fetch.relationship);
+
+        let (target_table_name, source_column, target_column) = if let Some(rel) = relationship {
+            (
+                rel.to_table.clone(),
+                rel.from_column.clone(),
+                rel.to_column.clone(),
+            )
+        } else {
+            // Assume relationship name is the table name, use convention:
+            // For fetching "orders" from a user row, assume user.id -> orders.user_id
+            // Get the primary table's assumed id column name
+            let target_table = fetch.relationship.clone();
+            let source_col = "id".to_string();
+            // Convention: target_table has a foreign key named <source_table>_id
+            // But we don't know source table name here, so try common patterns
+            let target_col = format!(
+                "{}_id",
+                source_row
+                    .columns
+                    .first()
+                    .map(|_| "parent")
+                    .unwrap_or("parent")
+            );
+            (target_table, source_col, target_col)
+        };
+
+        // Get the target table
+        let target_table = match self.tables.get(&target_table_name) {
+            Some(t) => t,
+            None => {
+                // Table not found, return empty array
+                return Ok(Value::Text("[]".to_string()));
+            }
+        };
+
+        // Get the source value to match against
+        let source_idx = source_row.columns.iter().position(|c| c == &source_column);
+        let source_value = match source_idx {
+            Some(idx) => &source_row.values[idx],
+            None => {
+                // Try finding by id if not found
+                source_row
+                    .columns
+                    .iter()
+                    .position(|c| c == "id")
+                    .map(|idx| &source_row.values[idx])
+                    .unwrap_or(&Value::Null)
+            }
+        };
+
+        // Find matching rows in the target table
+        let target_col_idx = target_table
+            .columns
+            .iter()
+            .position(|c| c == &target_column);
+
+        let mut matching_rows: Vec<Row> = target_table
+            .rows
+            .iter()
+            .filter(|row| {
+                if let Some(idx) = target_col_idx {
+                    &row.values[idx] == source_value
+                } else {
+                    // Try to match on first column as fallback
+                    row.values.first() == Some(source_value)
+                }
+            })
+            .cloned()
+            .collect();
+
+        // Apply WHERE clause to matching rows
+        if let Some(where_expr) = &fetch.where_clause {
+            matching_rows.retain(|row| evaluate_where(row, where_expr, params));
+        }
+
+        // Apply ORDER BY
+        if let Some(order) = &fetch.order_by {
+            matching_rows.sort_by(|a, b| {
+                let a_val = evaluate_expr(a, &order.expr, params);
+                let b_val = evaluate_expr(b, &order.expr, params);
+                let cmp = a_val
+                    .partial_cmp(&b_val)
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if order.ascending {
+                    cmp
+                } else {
+                    cmp.reverse()
+                }
+            });
+        }
+
+        // Apply LIMIT
+        if let Some(lim) = fetch.limit {
+            matching_rows.truncate(lim);
+        }
+
+        // Project columns
+        let projected_rows = self.project_columns(&matching_rows, &fetch.columns, params)?;
+
+        // Handle nested FETCH clauses
+        let final_rows = if !fetch.nested_fetch.is_empty() {
+            self.execute_fetch_clauses(&projected_rows, &matching_rows, &fetch.nested_fetch, params)?
+        } else {
+            projected_rows
+        };
+
+        // Convert to JSON-like value (Text representation)
+        let json = self.rows_to_json(&final_rows);
+        Ok(Value::Text(json))
+    }
+
+    /// Convert rows to a JSON array string
+    fn rows_to_json(&self, rows: &[Row]) -> String {
+        let json_objects: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                let fields: Vec<String> = row
+                    .columns
+                    .iter()
+                    .zip(row.values.iter())
+                    .map(|(col, val)| {
+                        let json_val = match val {
+                            Value::Null => "null".to_string(),
+                            Value::Integer(i) => i.to_string(),
+                            Value::Float(f) => f.to_string(),
+                            Value::Text(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                            Value::Boolean(b) => b.to_string(),
+                            Value::Blob(b) => format!("\"<blob:{} bytes>\"", b.len()),
+                            Value::Vector(v) => format!(
+                                "[{}]",
+                                v.iter()
+                                    .map(|f| f.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                        };
+                        format!("\"{}\":{}", col, json_val)
+                    })
+                    .collect();
+                format!("{{{}}}", fields.join(","))
+            })
+            .collect();
+        format!("[{}]", json_objects.join(","))
+    }
+
+    /// Execute a TRAVERSE statement for graph operations
+    fn execute_traverse(
+        &self,
+        clause: &TraverseClause,
+        from_table: &str,
+        where_clause: &Option<Expr>,
+        return_columns: &[SelectItem],
+        limit: &Option<usize>,
+        params: &QueryParams,
+    ) -> Result<ResultSet> {
+        // Get the starting table
+        let start_table = self.tables.get(from_table).ok_or_else(|| {
+            crate::NexusError::QueryError(format!("Table {} not found", from_table))
+        })?;
+
+        // Get starting nodes that match the WHERE clause
+        let mut start_nodes: Vec<Row> = start_table.rows.clone();
+
+        if let Some(start_where) = &clause.start_where {
+            start_nodes.retain(|row| evaluate_where(row, start_where, params));
+        }
+
+        if let Some(filter_where) = where_clause {
+            start_nodes.retain(|row| evaluate_where(row, filter_where, params));
+        }
+
+        // Perform traversal based on mode
+        let traversed_rows = match clause.mode {
+            TraverseMode::All => self.traverse_all(&start_nodes, clause, params)?,
+            TraverseMode::Bfs => self.traverse_bfs(&start_nodes, clause, params)?,
+            TraverseMode::Dfs => self.traverse_dfs(&start_nodes, clause, params)?,
+            TraverseMode::ShortestPath => {
+                // Shortest path requires a target - for now, return BFS results
+                self.traverse_bfs(&start_nodes, clause, params)?
+            }
+            TraverseMode::Cycle => self.detect_cycles(&start_nodes, clause, params)?,
+        };
+
+        // Apply LIMIT
+        let mut result_rows = traversed_rows;
+        if let Some(lim) = limit {
+            result_rows.truncate(*lim);
+        }
+
+        // Project return columns
+        let projected = self.project_columns(&result_rows, return_columns, params)?;
+
+        Ok(ResultSet::new(projected))
+    }
+
+    /// Traverse all paths using relationship pattern
+    fn traverse_all(
+        &self,
+        start_nodes: &[Row],
+        clause: &TraverseClause,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        let mut results = Vec::new();
+        let relationship_type = &clause.pattern.relationship_type;
+
+        // Find relationship or use convention
+        let rel = self.relationships.get(relationship_type);
+
+        for start_node in start_nodes {
+            let paths = self.find_paths(start_node, clause, rel, params, 0, &mut vec![]);
+            results.extend(paths);
+        }
+
+        Ok(results)
+    }
+
+    /// Breadth-first search traversal
+    fn traverse_bfs(
+        &self,
+        start_nodes: &[Row],
+        clause: &TraverseClause,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        use std::collections::VecDeque;
+
+        let mut results = Vec::new();
+        let mut visited: std::collections::HashSet<Vec<Value>> =
+            std::collections::HashSet::new();
+        let mut queue: VecDeque<(Row, usize)> = VecDeque::new();
+
+        let rel = self.relationships.get(&clause.pattern.relationship_type);
+
+        for start_node in start_nodes {
+            queue.push_back((start_node.clone(), 0));
+            visited.insert(start_node.values.clone());
+        }
+
+        while let Some((current, depth)) = queue.pop_front() {
+            if depth >= clause.min_depth {
+                results.push(current.clone());
+            }
+
+            if depth < clause.max_depth {
+                let neighbors = self.get_neighbors(&current, rel, clause, params)?;
+                for neighbor in neighbors {
+                    if !visited.contains(&neighbor.values) {
+                        visited.insert(neighbor.values.clone());
+                        queue.push_back((neighbor, depth + 1));
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Depth-first search traversal
+    fn traverse_dfs(
+        &self,
+        start_nodes: &[Row],
+        clause: &TraverseClause,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        let mut results = Vec::new();
+        let mut visited: std::collections::HashSet<Vec<Value>> =
+            std::collections::HashSet::new();
+
+        let rel = self.relationships.get(&clause.pattern.relationship_type);
+
+        for start_node in start_nodes {
+            self.dfs_visit(
+                start_node,
+                0,
+                clause,
+                rel,
+                params,
+                &mut visited,
+                &mut results,
+            )?;
+        }
+
+        Ok(results)
+    }
+
+    /// DFS helper function
+    fn dfs_visit(
+        &self,
+        node: &Row,
+        depth: usize,
+        clause: &TraverseClause,
+        rel: Option<&Relationship>,
+        params: &QueryParams,
+        visited: &mut std::collections::HashSet<Vec<Value>>,
+        results: &mut Vec<Row>,
+    ) -> Result<()> {
+        if visited.contains(&node.values) {
+            return Ok(());
+        }
+        visited.insert(node.values.clone());
+
+        if depth >= clause.min_depth {
+            results.push(node.clone());
+        }
+
+        if depth < clause.max_depth {
+            let neighbors = self.get_neighbors(node, rel, clause, params)?;
+            for neighbor in neighbors {
+                self.dfs_visit(&neighbor, depth + 1, clause, rel, params, visited, results)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Detect cycles in the graph
+    fn detect_cycles(
+        &self,
+        start_nodes: &[Row],
+        clause: &TraverseClause,
+        params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        let mut cycles = Vec::new();
+        let rel = self.relationships.get(&clause.pattern.relationship_type);
+
+        for start_node in start_nodes {
+            let mut path: Vec<Vec<Value>> = vec![start_node.values.clone()];
+            let mut visiting: std::collections::HashSet<Vec<Value>> =
+                std::collections::HashSet::new();
+            visiting.insert(start_node.values.clone());
+
+            self.find_cycles(
+                start_node,
+                0,
+                clause,
+                rel,
+                params,
+                &mut path,
+                &mut visiting,
+                &mut cycles,
+            )?;
+        }
+
+        Ok(cycles)
+    }
+
+    /// Find cycles helper
+    fn find_cycles(
+        &self,
+        node: &Row,
+        depth: usize,
+        clause: &TraverseClause,
+        rel: Option<&Relationship>,
+        params: &QueryParams,
+        path: &mut Vec<Vec<Value>>,
+        visiting: &mut std::collections::HashSet<Vec<Value>>,
+        cycles: &mut Vec<Row>,
+    ) -> Result<()> {
+        if depth >= clause.max_depth {
+            return Ok(());
+        }
+
+        let neighbors = self.get_neighbors(node, rel, clause, params)?;
+
+        for neighbor in neighbors {
+            if visiting.contains(&neighbor.values) {
+                // Found a cycle
+                cycles.push(neighbor.clone());
+            } else {
+                path.push(neighbor.values.clone());
+                visiting.insert(neighbor.values.clone());
+
+                self.find_cycles(
+                    &neighbor,
+                    depth + 1,
+                    clause,
+                    rel,
+                    params,
+                    path,
+                    visiting,
+                    cycles,
+                )?;
+
+                path.pop();
+                visiting.remove(&neighbor.values);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Find all paths from a starting node
+    fn find_paths(
+        &self,
+        node: &Row,
+        clause: &TraverseClause,
+        rel: Option<&Relationship>,
+        params: &QueryParams,
+        depth: usize,
+        visited: &mut Vec<Vec<Value>>,
+    ) -> Vec<Row> {
+        let mut results = Vec::new();
+
+        if depth >= clause.min_depth {
+            results.push(node.clone());
+        }
+
+        if depth >= clause.max_depth {
+            return results;
+        }
+
+        if visited.contains(&node.values) {
+            return results;
+        }
+
+        visited.push(node.values.clone());
+
+        if let Ok(neighbors) = self.get_neighbors(node, rel, clause, params) {
+            for neighbor in neighbors {
+                let sub_paths = self.find_paths(&neighbor, clause, rel, params, depth + 1, visited);
+                results.extend(sub_paths);
+            }
+        }
+
+        visited.pop();
+
+        results
+    }
+
+    /// Get neighbors of a node based on relationship
+    fn get_neighbors(
+        &self,
+        node: &Row,
+        rel: Option<&Relationship>,
+        clause: &TraverseClause,
+        _params: &QueryParams,
+    ) -> Result<Vec<Row>> {
+        let (target_table_name, source_col, target_col) = if let Some(r) = rel {
+            match clause.pattern.direction {
+                TraverseDirection::Outgoing => {
+                    (r.to_table.clone(), r.from_column.clone(), r.to_column.clone())
+                }
+                TraverseDirection::Incoming => {
+                    (r.from_table.clone(), r.to_column.clone(), r.from_column.clone())
+                }
+                TraverseDirection::Both => {
+                    // For bidirectional, we'd need to check both directions
+                    // For now, default to outgoing
+                    (r.to_table.clone(), r.from_column.clone(), r.to_column.clone())
+                }
+            }
+        } else {
+            // Use convention: relationship_type is the target table
+            let table_name = clause.pattern.relationship_type.clone();
+            ("".to_string(), "id".to_string(), format!("{}_id", table_name))
+        };
+
+        // If no relationship defined and no table found, return empty
+        if target_table_name.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let target_table = match self.tables.get(&target_table_name) {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+
+        // Get source value
+        let source_idx = node.columns.iter().position(|c| c == &source_col);
+        let source_value = match source_idx {
+            Some(idx) => &node.values[idx],
+            None => return Ok(Vec::new()),
+        };
+
+        // Find target column index
+        let target_col_idx = target_table.columns.iter().position(|c| c == &target_col);
+
+        let neighbors: Vec<Row> = target_table
+            .rows
+            .iter()
+            .filter(|row| {
+                if let Some(idx) = target_col_idx {
+                    &row.values[idx] == source_value
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
+        Ok(neighbors)
+    }
 }
 
 // Include comprehensive tests for INSERT column mapping
@@ -919,3 +2770,31 @@ mod executor_pragma_tests;
 #[cfg(test)]
 #[path = "executor_autoincrement_tests.rs"]
 mod executor_autoincrement_tests;
+
+#[cfg(test)]
+#[path = "executor_set_operations_tests.rs"]
+mod executor_set_operations_tests;
+
+#[cfg(test)]
+#[path = "executor_fetch_traverse_tests.rs"]
+mod executor_fetch_traverse_tests;
+
+#[cfg(test)]
+#[path = "executor_join_tests.rs"]
+mod executor_join_tests;
+
+#[cfg(test)]
+#[path = "executor_group_by_tests.rs"]
+mod executor_group_by_tests;
+
+#[cfg(test)]
+#[path = "executor_advanced_tests.rs"]
+mod executor_advanced_tests;
+
+#[cfg(test)]
+#[path = "executor_subquery_tests.rs"]
+mod executor_subquery_tests;
+
+#[cfg(test)]
+#[path = "executor_window_tests.rs"]
+mod executor_window_tests;

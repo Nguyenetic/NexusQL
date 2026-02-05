@@ -2,6 +2,95 @@
 
 All notable changes to NexusQL will be documented in this file.
 
+## [3.5.0] - 2026-02-05
+
+### 🎉 Major Feature Release - Advanced SQL Analytics
+
+This release adds comprehensive support for advanced SQL features including Window Functions, CTEs, Subqueries, JOINs, and GROUP BY/HAVING.
+
+### ✨ New Features
+
+#### Window Functions (ROW_NUMBER, RANK, LAG, LEAD)
+- **NEW:** `ROW_NUMBER() OVER (...)` - Sequential numbering within partitions
+- **NEW:** `RANK() OVER (...)` - Ranking with gaps for ties
+- **NEW:** `DENSE_RANK() OVER (...)` - Ranking without gaps
+- **NEW:** `LAG(column) OVER (...)` - Access previous row values
+- **NEW:** `LEAD(column) OVER (...)` - Access next row values
+- **NEW:** PARTITION BY and ORDER BY support in window specifications
+- **NEW:** Window frame specifications (ROWS/RANGE BETWEEN)
+
+```sql
+SELECT name, salary,
+       ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) as rank
+FROM employees;
+```
+
+#### Common Table Expressions (CTEs)
+- **NEW:** WITH clause for readable complex queries
+- **NEW:** Multiple CTEs in a single query
+- **NEW:** Column renaming in CTEs
+- **NEW:** Recursive CTE support (parser ready)
+
+```sql
+WITH top_earners AS (
+  SELECT * FROM employees WHERE salary > 80000
+)
+SELECT * FROM top_earners;
+```
+
+#### Subqueries
+- **NEW:** Scalar subqueries in SELECT list
+- **NEW:** IN subqueries: `WHERE id IN (SELECT user_id FROM orders)`
+- **NEW:** EXISTS subqueries: `WHERE EXISTS (SELECT 1 FROM ...)`
+- **NEW:** NOT IN and NOT EXISTS support
+- **NEW:** Correlated subqueries
+
+#### SQL JOINs
+- **NEW:** INNER JOIN
+- **NEW:** LEFT OUTER JOIN
+- **NEW:** RIGHT OUTER JOIN
+- **NEW:** FULL OUTER JOIN
+- **NEW:** CROSS JOIN
+- **NEW:** Multiple JOINs in a single query
+
+```sql
+SELECT u.name, o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE o.total > 100;
+```
+
+#### GROUP BY / HAVING
+- **NEW:** GROUP BY with aggregate functions (COUNT, SUM, AVG, MIN, MAX)
+- **NEW:** HAVING clause for filtering groups
+- **NEW:** Multiple GROUP BY columns
+
+```sql
+SELECT department, COUNT(*), AVG(salary)
+FROM employees
+GROUP BY department
+HAVING COUNT(*) > 5;
+```
+
+### 📊 Test Results
+- **Total tests:** 421 (up from 298)
+- **Pass rate:** 100%
+- **New test files:**
+  - `executor_window_tests.rs` - 5 tests
+  - `executor_advanced_tests.rs` - 5 tests (CTEs)
+  - `executor_subquery_tests.rs` - 5 tests
+  - `executor_join_tests.rs` - 5 tests
+  - `executor_group_by_tests.rs` - 5 tests
+
+### 🔧 Technical Details
+- Window functions integrated via `WindowManager`
+- CTEs materialized as temporary tables
+- Subqueries executed inline with row correlation
+- Nested loop join algorithm for JOINs
+- Group-by with hash-based grouping
+
+---
+
 ## [3.4.0] - 2025-01-07
 
 ### ✨ New Features

@@ -100,6 +100,28 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
             let val = evaluate_expr(row, expr, params);
             cast_value(val, data_type)
         }
+
+        // Subquery expressions require executor context and are evaluated there
+        // These placeholders should not be reached during normal row-level evaluation
+        Expr::Subquery(_) => {
+            // Scalar subqueries are evaluated by the executor before row evaluation
+            Value::Null
+        }
+
+        Expr::InSubquery { .. } => {
+            // IN subqueries are evaluated by the executor
+            Value::Boolean(false)
+        }
+
+        Expr::ExistsSubquery { .. } => {
+            // EXISTS subqueries are evaluated by the executor
+            Value::Boolean(false)
+        }
+
+        Expr::WindowFunction { .. } => {
+            // Window functions are evaluated by the executor with partition context
+            Value::Null
+        }
     }
 }
 
