@@ -64,6 +64,7 @@ mod insert_column_mapping_tests {
                         Expr::Literal(Value::Integer(25)),
                         Expr::Literal(Value::Text("alice@example.com".to_string())),
                     ]],
+                    on_conflict: None,
                 },
                 &QueryParams::default(),
             )
@@ -137,6 +138,7 @@ mod insert_column_mapping_tests {
                         Expr::Literal(Value::Text("Alice".to_string())),
                         Expr::Literal(Value::Vector(vec![0.1, 0.2, 0.3])),
                     ]],
+                    on_conflict: None,
                 },
                 &QueryParams::default(),
             )
@@ -191,6 +193,7 @@ mod insert_column_mapping_tests {
                         Expr::Literal(Value::Text("test".to_string())),
                         Expr::Literal(Value::Integer(42)),
                     ]],
+                    on_conflict: None,
                 },
                 &QueryParams::default(),
             )
@@ -243,6 +246,7 @@ mod insert_column_mapping_tests {
                     table: "partial".to_string(),
                     columns: Some(vec!["name".to_string()]),
                     values: vec![vec![Expr::Literal(Value::Text("Bob".to_string()))]],
+                    on_conflict: None,
                 },
                 &QueryParams::default(),
             )
@@ -281,6 +285,7 @@ mod insert_column_mapping_tests {
                 table: "test".to_string(),
                 columns: Some(vec!["invalid".to_string()]),
                 values: vec![vec![Expr::Literal(Value::Text("test".to_string()))]],
+                on_conflict: None,
             },
             &QueryParams::default(),
         );
@@ -331,6 +336,7 @@ mod insert_column_mapping_tests {
                         vec![Expr::Literal(Value::Text("second".to_string()))],
                         vec![Expr::Literal(Value::Text("third".to_string()))],
                     ],
+                    on_conflict: None,
                 },
                 &QueryParams::default(),
             )

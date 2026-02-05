@@ -95,6 +95,91 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
             let val = evaluate_expr(row, inner, params);
             Value::Boolean(!matches!(val, Value::Null))
         }
+
+        Expr::Cast { expr, data_type } => {
+            let val = evaluate_expr(row, expr, params);
+            cast_value(val, data_type)
+        }
+    }
+}
+
+/// Cast a value to the specified data type
+fn cast_value(value: Value, target_type: &crate::query::ast::DataType) -> Value {
+    use crate::query::ast::DataType;
+
+    match (value, target_type) {
+        // NULL stays NULL
+        (Value::Null, _) => Value::Null,
+
+        // Cast to Integer
+        (Value::Integer(i), DataType::Integer) => Value::Integer(i),
+        (Value::Float(f), DataType::Integer) => Value::Integer(f.into_inner() as i64),
+        (Value::Text(s), DataType::Integer) => s
+            .parse::<i64>()
+            .map(Value::Integer)
+            .unwrap_or(Value::Null),
+        (Value::Boolean(b), DataType::Integer) => Value::Integer(if b { 1 } else { 0 }),
+
+        // Cast to Float
+        (Value::Integer(i), DataType::Float) => {
+            Value::Float(ordered_float::OrderedFloat(i as f64))
+        }
+        (Value::Float(f), DataType::Float) => Value::Float(f),
+        (Value::Text(s), DataType::Float) => s
+            .parse::<f64>()
+            .map(|f| Value::Float(ordered_float::OrderedFloat(f)))
+            .unwrap_or(Value::Null),
+        (Value::Boolean(b), DataType::Float) => {
+            Value::Float(ordered_float::OrderedFloat(if b { 1.0 } else { 0.0 }))
+        }
+
+        // Cast to Text
+        (Value::Integer(i), DataType::Text) => Value::Text(i.to_string()),
+        (Value::Float(f), DataType::Text) => Value::Text(f.to_string()),
+        (Value::Text(s), DataType::Text) => Value::Text(s),
+        (Value::Boolean(b), DataType::Text) => {
+            Value::Text(if b { "true".to_string() } else { "false".to_string() })
+        }
+        (Value::Vector(v), DataType::Text) => {
+            let formatted = v
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            Value::Text(format!("[{}]", formatted))
+        }
+
+        // Cast to Boolean
+        (Value::Integer(i), DataType::Boolean) => Value::Boolean(i != 0),
+        (Value::Float(f), DataType::Boolean) => Value::Boolean(f.into_inner() != 0.0),
+        (Value::Text(s), DataType::Boolean) => {
+            let lower = s.to_lowercase();
+            Value::Boolean(lower == "true" || lower == "1" || lower == "yes" || lower == "on")
+        }
+        (Value::Boolean(b), DataType::Boolean) => Value::Boolean(b),
+
+        // Cast to Vector
+        (Value::Text(s), DataType::Vector(_)) => {
+            // Parse "[0.1, 0.2, 0.3]" format
+            let trimmed = s.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                let inner = &trimmed[1..trimmed.len() - 1];
+                let result: Result<Vec<f32>, _> = inner
+                    .split(',')
+                    .map(|s| s.trim().parse::<f32>())
+                    .collect();
+                match result {
+                    Ok(v) => Value::Vector(v),
+                    Err(_) => Value::Null,
+                }
+            } else {
+                Value::Null
+            }
+        }
+        (Value::Vector(v), DataType::Vector(_)) => Value::Vector(v),
+
+        // Unsupported casts return NULL
+        _ => Value::Null,
     }
 }
 
@@ -346,6 +431,47 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams)
             }
         }
 
+        // Null handling functions
+        "NULLIF" => {
+            // NULLIF(x, y) returns NULL if x = y, otherwise returns x
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let arg1 = evaluate_expr(row, &args[0], params);
+            let arg2 = evaluate_expr(row, &args[1], params);
+
+            if arg1 == arg2 {
+                Value::Null
+            } else {
+                arg1
+            }
+        }
+
+        "COALESCE" => {
+            // COALESCE(x1, x2, ...) returns the first non-NULL argument
+            for arg in args {
+                let value = evaluate_expr(row, arg, params);
+                if value != Value::Null {
+                    return value;
+                }
+            }
+            Value::Null
+        }
+
+        "IFNULL" | "NVL" => {
+            // IFNULL(x, y) / NVL(x, y) returns x if x is not NULL, otherwise y
+            // This is equivalent to COALESCE(x, y)
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let arg1 = evaluate_expr(row, &args[0], params);
+            if arg1 != Value::Null {
+                arg1
+            } else {
+                evaluate_expr(row, &args[1], params)
+            }
+        }
+
         // Unknown function
         _ => Value::Null,
     }
@@ -381,5 +507,78 @@ mod tests {
 
         let params = QueryParams::default();
         assert!(evaluate_where(&row, &expr, &params));
+    }
+
+    #[test]
+    fn test_cast_text_to_integer() {
+        use crate::query::ast::DataType;
+
+        let row = Row::new(vec!["val".to_string()], vec![Value::Text("42".to_string())]);
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("val".to_string())),
+            data_type: DataType::Integer,
+        };
+        let params = QueryParams::default();
+        let result = evaluate_expr(&row, &expr, &params);
+        assert_eq!(result, Value::Integer(42));
+    }
+
+    #[test]
+    fn test_cast_integer_to_text() {
+        use crate::query::ast::DataType;
+
+        let row = Row::new(vec!["val".to_string()], vec![Value::Integer(123)]);
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("val".to_string())),
+            data_type: DataType::Text,
+        };
+        let params = QueryParams::default();
+        let result = evaluate_expr(&row, &expr, &params);
+        assert_eq!(result, Value::Text("123".to_string()));
+    }
+
+    #[test]
+    fn test_cast_float_to_integer() {
+        use crate::query::ast::DataType;
+
+        let row = Row::new(
+            vec!["val".to_string()],
+            vec![Value::Float(ordered_float::OrderedFloat(3.7))],
+        );
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("val".to_string())),
+            data_type: DataType::Integer,
+        };
+        let params = QueryParams::default();
+        let result = evaluate_expr(&row, &expr, &params);
+        assert_eq!(result, Value::Integer(3));
+    }
+
+    #[test]
+    fn test_cast_bool_to_integer() {
+        use crate::query::ast::DataType;
+
+        let row = Row::new(vec!["val".to_string()], vec![Value::Boolean(true)]);
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("val".to_string())),
+            data_type: DataType::Integer,
+        };
+        let params = QueryParams::default();
+        let result = evaluate_expr(&row, &expr, &params);
+        assert_eq!(result, Value::Integer(1));
+    }
+
+    #[test]
+    fn test_cast_null_remains_null() {
+        use crate::query::ast::DataType;
+
+        let row = Row::new(vec!["val".to_string()], vec![Value::Null]);
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("val".to_string())),
+            data_type: DataType::Integer,
+        };
+        let params = QueryParams::default();
+        let result = evaluate_expr(&row, &expr, &params);
+        assert_eq!(result, Value::Null);
     }
 }

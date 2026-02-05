@@ -201,13 +201,19 @@ impl Executor {
                 table,
                 columns,
                 unique: _,
-                if_not_exists: _,
-                using: _,
-                with_options: _,
+                if_not_exists,
+                using,
+                with_options,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
-                    // For now, create a B-Tree index on the first column
-                    // TODO: Support multi-column indexes
+                    // Check IF NOT EXISTS
+                    if *if_not_exists
+                        && (t.indexes.contains_key(index_name)
+                            || t.typed_indexes.contains_key(index_name))
+                    {
+                        return Ok(ResultSet::empty());
+                    }
+
                     if let Some(first_col) = columns.first() {
                         let col_idx =
                             t.columns
@@ -220,17 +226,139 @@ impl Executor {
                                     ))
                                 })?;
 
-                        // Create B-Tree index
-                        let mut index =
-                            crate::index::btree::BTreeIndex::new(first_col.clone(), col_idx);
+                        // Determine index type from USING clause
+                        let index_type = using
+                            .as_ref()
+                            .map(|s| s.to_lowercase())
+                            .unwrap_or_else(|| "btree".to_string());
 
-                        // Build index from existing rows
-                        for (row_id, row) in t.rows.iter().enumerate() {
-                            index.insert(row, row_id);
+                        match index_type.as_str() {
+                            "hnsw" => {
+                                // Parse HNSW parameters from WITH options
+                                let mut m = 16usize;
+                                let mut ef_construction = 200usize;
+                                let mut ef_search = 50usize;
+
+                                for opt in with_options {
+                                    match opt.name.to_lowercase().as_str() {
+                                        "m" => {
+                                            if let Value::Integer(v) = &opt.value {
+                                                m = *v as usize;
+                                            }
+                                        }
+                                        "ef_construction" => {
+                                            if let Value::Integer(v) = &opt.value {
+                                                ef_construction = *v as usize;
+                                            }
+                                        }
+                                        "ef_search" | "ef" => {
+                                            if let Value::Integer(v) = &opt.value {
+                                                ef_search = *v as usize;
+                                            }
+                                        }
+                                        _ => {} // Ignore unknown options
+                                    }
+                                }
+
+                                // Create HNSW index
+                                let hnsw_index =
+                                    crate::index::HNSWIndex::new(m, ef_construction, ef_search);
+
+                                // Store in typed_indexes
+                                t.typed_indexes.insert(
+                                    index_name.clone(),
+                                    crate::storage::IndexType::HNSW(hnsw_index),
+                                );
+
+                                tracing::info!(
+                                    "Created HNSW index '{}' on {}.{} (m={}, ef_construction={}, ef_search={})",
+                                    index_name, table, first_col, m, ef_construction, ef_search
+                                );
+                            }
+                            "gin" => {
+                                // Create GIN index for arrays/JSON/full-text
+                                let gin_index = crate::index::GINIndex::new(
+                                    index_name.clone(),
+                                    first_col.clone(),
+                                    crate::index::GINOperatorClass::TsvectorOps,
+                                );
+
+                                t.typed_indexes.insert(
+                                    index_name.clone(),
+                                    crate::storage::IndexType::GIN(gin_index),
+                                );
+
+                                tracing::info!(
+                                    "Created GIN index '{}' on {}.{}",
+                                    index_name, table, first_col
+                                );
+                            }
+                            "gist" => {
+                                // Create GiST index for geometric/spatial data
+                                let gist_index = crate::index::GiSTIndex::new(
+                                    index_name.clone(),
+                                    first_col.clone(),
+                                    crate::index::GiSTIndexType::RangeTree,
+                                );
+
+                                t.typed_indexes.insert(
+                                    index_name.clone(),
+                                    crate::storage::IndexType::GiST(gist_index),
+                                );
+
+                                tracing::info!(
+                                    "Created GiST index '{}' on {}.{}",
+                                    index_name, table, first_col
+                                );
+                            }
+                            "brin" => {
+                                // Parse BRIN parameters
+                                let mut pages_per_range = 128usize;
+
+                                for opt in with_options {
+                                    if opt.name.to_lowercase() == "pages_per_range" {
+                                        if let Value::Integer(v) = &opt.value {
+                                            pages_per_range = *v as usize;
+                                        }
+                                    }
+                                }
+
+                                // Create BRIN index for time-series data
+                                let brin_index = crate::index::BRINIndex::new(
+                                    index_name.clone(),
+                                    first_col.clone(),
+                                    Some(pages_per_range),
+                                );
+
+                                t.typed_indexes.insert(
+                                    index_name.clone(),
+                                    crate::storage::IndexType::BRIN(brin_index),
+                                );
+
+                                tracing::info!(
+                                    "Created BRIN index '{}' on {}.{} (pages_per_range={})",
+                                    index_name, table, first_col, pages_per_range
+                                );
+                            }
+                            "btree" | _ => {
+                                // Default: Create B-Tree index
+                                let mut index =
+                                    crate::index::btree::BTreeIndex::new(first_col.clone(), col_idx);
+
+                                // Build index from existing rows
+                                for (row_id, row) in t.rows.iter().enumerate() {
+                                    index.insert(row, row_id);
+                                }
+
+                                // Store index in table (legacy storage for B-Tree)
+                                t.indexes.insert(index_name.clone(), index);
+
+                                tracing::info!(
+                                    "Created B-Tree index '{}' on {}.{}",
+                                    index_name, table, first_col
+                                );
+                            }
                         }
-
-                        // Store index in table
-                        t.indexes.insert(index_name.clone(), index);
                     }
 
                     Ok(ResultSet::empty())
@@ -259,8 +387,16 @@ impl Executor {
                 table,
                 columns,
                 values,
+                on_conflict,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
+                    // Find primary key column index for conflict detection
+                    let pk_col_idx = t.columns.iter().position(|c| {
+                        // For now, assume first column named "id" or marked as auto_increment is PK
+                        c.to_lowercase() == "id"
+                            || t.auto_increment_column.as_ref() == Some(c)
+                    });
+
                     for expr_set in values {
                         // Evaluate each expression with the provided parameters
                         // Use an empty row since we're not referencing columns in INSERT VALUES
@@ -312,8 +448,85 @@ impl Executor {
                             }
                         }
 
-                        let row = Row::new(insert_columns, insert_values);
-                        t.insert(row);
+                        // Handle ON CONFLICT / INSERT OR ... modes
+                        let row = Row::new(insert_columns.clone(), insert_values.clone());
+
+                        match on_conflict {
+                            Some(crate::query::ast::OnConflict::Replace) => {
+                                // INSERT OR REPLACE: Delete existing row with same PK, then insert
+                                if let Some(pk_idx) = pk_col_idx {
+                                    let pk_value = &insert_values[pk_idx];
+                                    // Remove existing row with same PK
+                                    t.rows.retain(|existing| {
+                                        existing.values.get(pk_idx) != Some(pk_value)
+                                    });
+                                }
+                                t.insert(row);
+                            }
+                            Some(crate::query::ast::OnConflict::Ignore) => {
+                                // INSERT OR IGNORE: Skip if conflict
+                                let has_conflict = pk_col_idx.map_or(false, |pk_idx| {
+                                    let pk_value = &insert_values[pk_idx];
+                                    t.rows.iter().any(|existing| {
+                                        existing.values.get(pk_idx) == Some(pk_value)
+                                    })
+                                });
+                                if !has_conflict {
+                                    t.insert(row);
+                                }
+                            }
+                            Some(crate::query::ast::OnConflict::Abort) => {
+                                // INSERT OR ABORT: Fail if conflict (default behavior)
+                                let has_conflict = pk_col_idx.map_or(false, |pk_idx| {
+                                    let pk_value = &insert_values[pk_idx];
+                                    t.rows.iter().any(|existing| {
+                                        existing.values.get(pk_idx) == Some(pk_value)
+                                    })
+                                });
+                                if has_conflict {
+                                    return Err(crate::NexusError::QueryError(
+                                        "UNIQUE constraint failed".to_string(),
+                                    ));
+                                }
+                                t.insert(row);
+                            }
+                            Some(crate::query::ast::OnConflict::Rollback) => {
+                                // INSERT OR ROLLBACK: Similar to ABORT but affects transaction
+                                // For now, treat same as ABORT
+                                let has_conflict = pk_col_idx.map_or(false, |pk_idx| {
+                                    let pk_value = &insert_values[pk_idx];
+                                    t.rows.iter().any(|existing| {
+                                        existing.values.get(pk_idx) == Some(pk_value)
+                                    })
+                                });
+                                if has_conflict {
+                                    return Err(crate::NexusError::QueryError(
+                                        "UNIQUE constraint failed (ROLLBACK)".to_string(),
+                                    ));
+                                }
+                                t.insert(row);
+                            }
+                            Some(crate::query::ast::OnConflict::Fail) => {
+                                // INSERT OR FAIL: Fail but keep previous changes
+                                let has_conflict = pk_col_idx.map_or(false, |pk_idx| {
+                                    let pk_value = &insert_values[pk_idx];
+                                    t.rows.iter().any(|existing| {
+                                        existing.values.get(pk_idx) == Some(pk_value)
+                                    })
+                                });
+                                if has_conflict {
+                                    return Err(crate::NexusError::QueryError(
+                                        "UNIQUE constraint failed (FAIL)".to_string(),
+                                    ));
+                                }
+                                t.insert(row);
+                            }
+                            _ => {
+                                // No conflict handling or DoUpdate/DoNothing (PostgreSQL style)
+                                // Just do normal insert
+                                t.insert(row);
+                            }
+                        }
                     }
                     Ok(ResultSet::empty())
                 } else {

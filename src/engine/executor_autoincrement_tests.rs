@@ -44,6 +44,7 @@ mod autoincrement_tests {
             table: "users".to_string(),
             columns: Some(vec!["name".to_string()]),
             values: vec![vec![Expr::Literal(Value::Text("Alice".to_string()))]],
+            on_conflict: None,
         };
         executor.execute(&insert1, &params).unwrap();
 
@@ -52,6 +53,7 @@ mod autoincrement_tests {
             table: "users".to_string(),
             columns: Some(vec!["name".to_string()]),
             values: vec![vec![Expr::Literal(Value::Text("Bob".to_string()))]],
+            on_conflict: None,
         };
         executor.execute(&insert2, &params).unwrap();
 
@@ -108,6 +110,7 @@ mod autoincrement_tests {
                 Expr::Literal(Value::Integer(100)),
                 Expr::Literal(Value::Text("Custom".to_string())),
             ]],
+            on_conflict: None,
         };
         executor.execute(&insert1, &params).unwrap();
 
@@ -116,6 +119,7 @@ mod autoincrement_tests {
             table: "items".to_string(),
             columns: Some(vec!["value".to_string()]),
             values: vec![vec![Expr::Literal(Value::Text("Auto".to_string()))]],
+            on_conflict: None,
         };
         executor.execute(&insert2, &params).unwrap();
 
@@ -170,6 +174,7 @@ mod autoincrement_tests {
                 Expr::Literal(Value::Null), // NULL for AUTO_INCREMENT
                 Expr::Literal(Value::Text("Test".to_string())),
             ]],
+            on_conflict: None,
         };
         executor.execute(&insert, &params).unwrap();
 
@@ -221,6 +226,7 @@ mod autoincrement_tests {
                 table: "counter".to_string(),
                 columns: Some(vec!["data".to_string()]),
                 values: vec![vec![Expr::Literal(Value::Text(format!("Row {}", i)))]],
+                on_conflict: None,
             };
             executor.execute(&insert, &params).unwrap();
         }
@@ -278,6 +284,7 @@ mod autoincrement_tests {
             table: "manual".to_string(),
             columns: Some(vec!["value".to_string()]),
             values: vec![vec![Expr::Literal(Value::Text("Test".to_string()))]],
+            on_conflict: None,
         };
         executor.execute(&insert, &params).unwrap();
 
@@ -337,6 +344,7 @@ mod autoincrement_tests {
                 Expr::Literal(Value::Text("alice@example.com".to_string())),
                 Expr::Literal(Value::Text("Alice".to_string())),
             ]],
+            on_conflict: None,
         };
         executor.execute(&insert, &params).unwrap();
 

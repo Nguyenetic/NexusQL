@@ -1,7 +1,10 @@
 //! Full SQL Parser using sqlparser-rs with NexusQL custom dialect
 //! PROPRIETARY
 
-use crate::query::ast::*;
+use crate::query::ast::{
+    BinaryOperator, ColumnDef, DataType, Expr, IndexOption, OnConflict, OrderBy, Parameter,
+    SelectItem, Statement, TransactionOp,
+};
 use crate::types::Value;
 use crate::{NexusError, Result};
 use sqlparser::ast as sql_ast;
@@ -614,6 +617,20 @@ impl QueryParser {
                 Ok(Expr::IsNotNull(Box::new(inner)))
             }
 
+            // CAST expression (CAST(expr AS type) or expr::type in PostgreSQL)
+            sql_ast::Expr::Cast {
+                expr: inner_expr,
+                data_type,
+                ..
+            } => {
+                let inner = self.convert_expr_to_ast(inner_expr)?;
+                let target_type = self.convert_data_type(data_type);
+                Ok(Expr::Cast {
+                    expr: Box::new(inner),
+                    data_type: target_type,
+                })
+            }
+
             _ => Err(NexusError::ParseError(format!(
                 "Unsupported expression in SELECT: {:?}",
                 expr
@@ -675,10 +692,26 @@ impl QueryParser {
             }
         }
 
+        // Handle INSERT OR ... (SQLite conflict resolution)
+        let on_conflict = match &insert.or {
+            Some(or_clause) => {
+                use sql_ast::SqliteOnConflict;
+                match or_clause {
+                    SqliteOnConflict::Replace => Some(OnConflict::Replace),
+                    SqliteOnConflict::Ignore => Some(OnConflict::Ignore),
+                    SqliteOnConflict::Rollback => Some(OnConflict::Rollback),
+                    SqliteOnConflict::Abort => Some(OnConflict::Abort),
+                    SqliteOnConflict::Fail => Some(OnConflict::Fail),
+                }
+            }
+            None => None, // TODO: Add PostgreSQL ON CONFLICT DO UPDATE/NOTHING support
+        };
+
         Ok(Statement::Insert {
             table,
             columns,
             values,
+            on_conflict,
         })
     }
 
@@ -884,6 +917,20 @@ impl QueryParser {
                 Ok(Expr::Literal(Value::Vector(vector)))
             }
 
+            // CAST expression (CAST(expr AS type) or expr::type in PostgreSQL)
+            sql_ast::Expr::Cast {
+                expr: inner_expr,
+                data_type,
+                ..
+            } => {
+                let inner = self.convert_where_expr(inner_expr)?;
+                let target_type = self.convert_data_type(data_type);
+                Ok(Expr::Cast {
+                    expr: Box::new(inner),
+                    data_type: target_type,
+                })
+            }
+
             _ => Err(NexusError::ParseError(
                 "Complex WHERE expressions not yet supported".into(),
             )),
@@ -988,6 +1035,79 @@ mod tests {
                 assert_eq!(unique, false);
             }
             _ => panic!("Expected CreateIndex with multiple columns"),
+        }
+    }
+
+    #[test]
+    fn test_parse_cast_as_integer() {
+        // Test PostgreSQL-style cast: '42'::INTEGER
+        let stmt = QueryParser::parse("SELECT '42'::INTEGER AS num FROM users").unwrap();
+        match stmt {
+            Statement::Select { columns, .. } => {
+                assert_eq!(columns.len(), 1);
+                if let SelectItem::Expr { expr, alias } = &columns[0] {
+                    assert_eq!(alias, &Some("num".to_string()));
+                    match expr {
+                        Expr::Cast { data_type, .. } => {
+                            assert_eq!(*data_type, DataType::Integer);
+                        }
+                        _ => panic!("Expected Cast expression"),
+                    }
+                } else {
+                    panic!("Expected expression with alias");
+                }
+            }
+            _ => panic!("Expected SELECT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_cast_as_text() {
+        // Test CAST function syntax: CAST(123 AS TEXT)
+        let stmt = QueryParser::parse("SELECT CAST(123 AS TEXT) AS str FROM users").unwrap();
+        match stmt {
+            Statement::Select { columns, .. } => {
+                assert_eq!(columns.len(), 1);
+                if let SelectItem::Expr { expr, alias } = &columns[0] {
+                    assert_eq!(alias, &Some("str".to_string()));
+                    match expr {
+                        Expr::Cast { data_type, .. } => {
+                            assert_eq!(*data_type, DataType::Text);
+                        }
+                        _ => panic!("Expected Cast expression"),
+                    }
+                } else {
+                    panic!("Expected expression with alias");
+                }
+            }
+            _ => panic!("Expected SELECT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_cast_column() {
+        // Test casting a column: price::FLOAT
+        let stmt = QueryParser::parse("SELECT price::FLOAT AS price_f FROM products").unwrap();
+        match stmt {
+            Statement::Select { columns, .. } => {
+                assert_eq!(columns.len(), 1);
+                if let SelectItem::Expr { expr, .. } = &columns[0] {
+                    match expr {
+                        Expr::Cast { expr: inner, data_type } => {
+                            assert_eq!(*data_type, DataType::Float);
+                            if let Expr::Column(col) = inner.as_ref() {
+                                assert_eq!(col, "price");
+                            } else {
+                                panic!("Expected column reference inside cast");
+                            }
+                        }
+                        _ => panic!("Expected Cast expression"),
+                    }
+                } else {
+                    panic!("Expected expression");
+                }
+            }
+            _ => panic!("Expected SELECT statement"),
         }
     }
 }

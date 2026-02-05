@@ -16,6 +16,11 @@ pub enum Statement {
         table: String,
         columns: Vec<String>,
         unique: bool,
+        if_not_exists: bool,
+        /// Index method (e.g., "hnsw", "btree", "gin")
+        using: Option<String>,
+        /// WITH clause options (e.g., m=16, ef_construction=100 for HNSW)
+        with_options: Vec<IndexOption>,
     },
     DropTable {
         name: String,
@@ -25,6 +30,8 @@ pub enum Statement {
         table: String,
         columns: Option<Vec<String>>,
         values: Vec<Vec<Expr>>, // Changed from Value to Expr to support parameters
+        /// Conflict handling mode (e.g., for INSERT OR REPLACE)
+        on_conflict: Option<OnConflict>,
     },
     Select {
         columns: Vec<SelectItem>, // Items to select (columns, expressions, *)
@@ -60,6 +67,33 @@ pub enum TransactionOp {
     Rollback,
 }
 
+/// Conflict handling for INSERT statements
+#[derive(Debug, Clone, PartialEq)]
+pub enum OnConflict {
+    /// REPLACE: Delete existing row and insert new one (SQLite INSERT OR REPLACE)
+    Replace,
+    /// IGNORE: Skip insert if conflict occurs (SQLite INSERT OR IGNORE)
+    Ignore,
+    /// ROLLBACK: Rollback transaction on conflict (SQLite INSERT OR ROLLBACK)
+    Rollback,
+    /// ABORT: Abort statement on conflict (SQLite INSERT OR ABORT, default)
+    Abort,
+    /// FAIL: Fail statement but keep previous changes (SQLite INSERT OR FAIL)
+    Fail,
+    /// DO UPDATE: Update existing row (PostgreSQL ON CONFLICT DO UPDATE)
+    DoUpdate {
+        /// Columns that define the conflict target (e.g., primary key)
+        conflict_target: Vec<String>,
+        /// SET clause for the update
+        update_set: Vec<(String, Expr)>,
+    },
+    /// DO NOTHING: Skip insert if conflict (PostgreSQL ON CONFLICT DO NOTHING)
+    DoNothing {
+        /// Optional conflict target columns
+        conflict_target: Option<Vec<String>>,
+    },
+}
+
 /// Column definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnDef {
@@ -76,7 +110,14 @@ pub struct OrderBy {
     pub ascending: bool,
 }
 
+/// Index option for WITH clause (e.g., m = 16, ef_construction = 100)
 #[derive(Debug, Clone, PartialEq)]
+pub struct IndexOption {
+    pub name: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DataType {
     Integer,
     Float,
@@ -127,6 +168,12 @@ pub enum Expr {
 
     /// IS NOT NULL check
     IsNotNull(Box<Expr>),
+
+    /// Type cast expression (e.g., value::INTEGER, CAST(value AS INTEGER))
+    Cast {
+        expr: Box<Expr>,
+        data_type: DataType,
+    },
 }
 
 /// Parameter placeholder

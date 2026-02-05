@@ -5,6 +5,7 @@ use crate::storage::Table;
 use crate::Result;
 use sled::Db;
 use std::io;
+use std::path::Path;
 
 /// Persistent disk storage using sled
 #[allow(dead_code)]
@@ -14,6 +15,12 @@ pub struct DiskStorage {
 }
 
 impl DiskStorage {
+    /// Create or open a NexusQL database at the given path.
+    ///
+    /// For disk mode, this will:
+    /// - Create a new sled database if the path doesn't exist
+    /// - Open an existing sled database if the path is a directory
+    /// - Return an error if the path is a file (not a NexusQL database)
     pub fn new(path: &str) -> Result<Self> {
         // Check if this is in-memory mode
         let is_memory = path.starts_with(":memory:");
@@ -22,6 +29,31 @@ impl DiskStorage {
             // For in-memory mode, don't create actual sled database
             None
         } else {
+            // Check if path exists and what type it is
+            let path_obj = Path::new(path);
+
+            if path_obj.exists() {
+                if path_obj.is_file() {
+                    // Path exists as a file - this is not a NexusQL database
+                    // Could be an SQLite file or other format
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "Cannot open '{}': path exists as a file, not a NexusQL database directory. \
+                            NexusQL uses a directory-based storage format (sled). \
+                            If you're trying to open an SQLite database, note that NexusQL is not SQLite-compatible. \
+                            To create a new NexusQL database, use a different path or remove the existing file.",
+                            path
+                        )
+                    ).into());
+                }
+                // Path is a directory - try to open existing database
+                tracing::debug!("Opening existing NexusQL database at: {}", path);
+            } else {
+                // Path doesn't exist - will create new database
+                tracing::debug!("Creating new NexusQL database at: {}", path);
+            }
+
             Some(
                 sled::open(path)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?,
@@ -29,6 +61,17 @@ impl DiskStorage {
         };
 
         Ok(Self { db, is_memory })
+    }
+
+    /// Check if a path contains a valid NexusQL database
+    pub fn is_nexusql_database(path: &str) -> bool {
+        let path_obj = Path::new(path);
+        if !path_obj.exists() || !path_obj.is_dir() {
+            return false;
+        }
+
+        // Sled databases have a "conf" file and "db" file in the directory
+        path_obj.join("conf").exists() || path_obj.join("db").exists()
     }
 
     /// Explicitly close the database and flush all data
