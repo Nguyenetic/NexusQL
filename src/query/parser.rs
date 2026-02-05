@@ -1110,4 +1110,78 @@ mod tests {
             _ => panic!("Expected SELECT statement"),
         }
     }
+
+    #[test]
+    fn test_parse_create_index_using_hnsw() {
+        // Test CREATE INDEX ... USING hnsw
+        let stmt = QueryParser::parse(
+            "CREATE INDEX idx_vectors ON documents USING hnsw (embedding)",
+        )
+        .unwrap();
+        match stmt {
+            Statement::CreateIndex {
+                name,
+                table,
+                columns,
+                using,
+                ..
+            } => {
+                assert_eq!(name, "idx_vectors");
+                assert_eq!(table, "documents");
+                assert_eq!(columns, vec!["embedding"]);
+                assert_eq!(using, Some("hnsw".to_string()));
+            }
+            _ => panic!("Expected CreateIndex statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_create_index_using_gin() {
+        // Test CREATE INDEX ... USING gin
+        let stmt = QueryParser::parse(
+            "CREATE INDEX idx_content ON documents USING gin (content)",
+        )
+        .unwrap();
+        match stmt {
+            Statement::CreateIndex {
+                name,
+                table,
+                columns,
+                using,
+                ..
+            } => {
+                assert_eq!(name, "idx_content");
+                assert_eq!(table, "documents");
+                assert_eq!(columns, vec!["content"]);
+                assert_eq!(using, Some("gin".to_string()));
+            }
+            _ => panic!("Expected CreateIndex statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_create_index_if_not_exists_using_hnsw() {
+        // Test CREATE INDEX IF NOT EXISTS ... USING hnsw
+        let stmt = QueryParser::parse(
+            "CREATE INDEX IF NOT EXISTS idx_pages_vector ON pages USING hnsw (content_vector)",
+        )
+        .unwrap();
+        match stmt {
+            Statement::CreateIndex {
+                name,
+                table,
+                columns,
+                if_not_exists,
+                using,
+                ..
+            } => {
+                assert_eq!(name, "idx_pages_vector");
+                assert_eq!(table, "pages");
+                assert_eq!(columns, vec!["content_vector"]);
+                assert!(if_not_exists);
+                assert_eq!(using, Some("hnsw".to_string()));
+            }
+            _ => panic!("Expected CreateIndex statement"),
+        }
+    }
 }
