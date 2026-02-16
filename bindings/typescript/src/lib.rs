@@ -48,23 +48,24 @@ impl NexusDB {
     pub async fn query_with_params(
         &self,
         sql: String,
-        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
-            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        #[napi(ts_arg_type = "(string | number | boolean | null)[] | undefined")] params: Option<
+            Vec<Option<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>>,
         >,
     ) -> Result<QueryResult> {
         let db = self.db.clone();
 
-        // Convert parameters to NexusValue
+        // Convert parameters to NexusValue (supports null values)
         let nexus_params = if let Some(params_vec) = params {
             params_vec
                 .into_iter()
                 .map(|p| match p {
-                    napi::Either::A(s) => NexusValue::Text(s),
-                    napi::Either::B(napi::Either::A(i)) => NexusValue::Integer(i),
-                    napi::Either::B(napi::Either::B(napi::Either::A(f))) => {
+                    None => NexusValue::Null,
+                    Some(napi::Either::A(s)) => NexusValue::Text(s),
+                    Some(napi::Either::B(napi::Either::A(i))) => NexusValue::Integer(i),
+                    Some(napi::Either::B(napi::Either::B(napi::Either::A(f)))) => {
                         NexusValue::Float(OrderedFloat(f))
                     }
-                    napi::Either::B(napi::Either::B(napi::Either::B(b))) => NexusValue::Boolean(b),
+                    Some(napi::Either::B(napi::Either::B(napi::Either::B(b)))) => NexusValue::Boolean(b),
                 })
                 .collect()
         } else {
@@ -99,8 +100,8 @@ impl NexusDB {
     pub async fn query(
         &self,
         sql: String,
-        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
-            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        #[napi(ts_arg_type = "(string | number | boolean | null)[] | undefined")] params: Option<
+            Vec<Option<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>>,
         >,
     ) -> Result<QueryResult> {
         self.query_with_params(sql, params).await
@@ -125,8 +126,8 @@ impl NexusDB {
     pub async fn execute(
         &self,
         sql: String,
-        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
-            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        #[napi(ts_arg_type = "(string | number | boolean | null)[] | undefined")] params: Option<
+            Vec<Option<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>>,
         >,
     ) -> Result<u32> {
         let result = self.query_with_params(sql, params).await?;
@@ -138,8 +139,8 @@ impl NexusDB {
     pub async fn execute_with_params(
         &self,
         sql: String,
-        #[napi(ts_arg_type = "any[] | undefined")] params: Option<
-            Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        #[napi(ts_arg_type = "(string | number | boolean | null)[] | undefined")] params: Option<
+            Vec<Option<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>>,
         >,
     ) -> Result<u32> {
         self.execute(sql, params).await
@@ -542,7 +543,7 @@ impl PreparedStatement {
     /// Execute the prepared statement with parameters
     ///
     /// # Arguments
-    /// * `params` - Variable arguments that will be bound to $1, $2, etc.
+    /// * `params` - Variable arguments that will be bound to $1, $2, etc. (supports null)
     ///
     /// # Example
     /// ```javascript
@@ -550,23 +551,24 @@ impl PreparedStatement {
     /// const result = await stmt.execute(123);
     /// await stmt.close();
     /// ```
-    #[napi(ts_args_type = "...params: any[]")]
+    #[napi(ts_args_type = "...params: (string | number | boolean | null)[]")]
     pub async fn execute(
         &self,
-        params: Vec<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>,
+        params: Vec<Option<napi::Either<String, napi::Either<i64, napi::Either<f64, bool>>>>>,
     ) -> Result<QueryResult> {
         let db = self.db.clone();
 
-        // Convert parameters to NexusValue
+        // Convert parameters to NexusValue (supports null values)
         let nexus_params: Vec<NexusValue> = params
             .into_iter()
             .map(|p| match p {
-                napi::Either::A(s) => NexusValue::Text(s),
-                napi::Either::B(napi::Either::A(i)) => NexusValue::Integer(i),
-                napi::Either::B(napi::Either::B(napi::Either::A(f))) => {
+                None => NexusValue::Null,
+                Some(napi::Either::A(s)) => NexusValue::Text(s),
+                Some(napi::Either::B(napi::Either::A(i))) => NexusValue::Integer(i),
+                Some(napi::Either::B(napi::Either::B(napi::Either::A(f)))) => {
                     NexusValue::Float(OrderedFloat(f))
                 }
-                napi::Either::B(napi::Either::B(napi::Either::B(b))) => NexusValue::Boolean(b),
+                Some(napi::Either::B(napi::Either::B(napi::Either::B(b)))) => NexusValue::Boolean(b),
             })
             .collect();
 
