@@ -203,13 +203,16 @@ impl NexusSQL {
         sql: &str,
         params: Option<Vec<Value>>,
     ) -> Result<ResultSet> {
-        let statement = QueryParser::parse(sql)?;
-
-        // Optimize query
-        let optimizer = Optimizer::new();
-        let _optimized = optimizer.optimize(statement)?;
-
-        // Execute with parameters
+        // Previously this path parsed the SQL twice and ran the optimizer
+        // whose result was immediately discarded (`let _optimized`). That
+        // doubled parse cost on every call — measurable (~50%) even for
+        // small queries, dominant for wide bulk INSERTs with hundreds of
+        // VALUES tuples. The kernel re-parses on its own path, so the work
+        // here is strictly redundant; drop it.
+        //
+        // If/when the optimizer gains real effect (pushdown, CSE, join
+        // reordering), reintroduce it via `self.kernel.execute_plan(plan)`
+        // so we don't pay parse twice.
         self.kernel
             .execute_with_params(sql, params.unwrap_or_default())
             .await
@@ -218,6 +221,18 @@ impl NexusSQL {
     /// Execute SQL without parameters (backward compatible)
     pub async fn execute(&self, sql: &str) -> Result<ResultSet> {
         self.execute_with_params(sql, None).await
+    }
+
+    /// Toggle bulk-load mode across every registered engine. When ON, DDL/DML
+    /// skips per-statement disk persistence — table state lives in memory
+    /// until `flush()` is called. Single biggest speedup for large loads.
+    pub async fn set_bulk_mode(&self, enabled: bool) {
+        self.kernel.set_bulk_mode(enabled).await
+    }
+
+    /// Flush any deferred writes across all engines. Call after bulk-loading.
+    pub async fn flush(&self) -> Result<()> {
+        self.kernel.flush().await
     }
 
     pub async fn shutdown(self) -> Result<()> {

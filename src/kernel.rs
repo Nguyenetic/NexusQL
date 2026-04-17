@@ -98,8 +98,26 @@ impl NexusKernel {
 
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("Shutting down NexusSQL kernel");
+        // Ensure any dirty buffers land on disk before the engines go away
+        self.flush().await.ok();
         for mut engine in self.engines.iter_mut() {
             engine.value_mut().shutdown().await?;
+        }
+        Ok(())
+    }
+
+    /// Propagate bulk-mode toggle to every engine. No-op for engines that
+    /// don't override the trait default.
+    pub async fn set_bulk_mode(&self, enabled: bool) {
+        for engine in self.engines.iter() {
+            engine.value().set_bulk_mode(enabled);
+        }
+    }
+
+    /// Flush any deferred writes across every engine.
+    pub async fn flush(&self) -> Result<()> {
+        for engine in self.engines.iter() {
+            engine.value().flush().await?;
         }
         Ok(())
     }

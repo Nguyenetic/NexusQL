@@ -51,6 +51,17 @@ pub trait StorageEngine: Send + Sync {
     async fn shutdown(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Enable/disable bulk-load mode: when ON, DDL/DML statements skip the
+    /// per-statement disk persistence (huge O(N^2) savings on wide bulk
+    /// INSERTs). Tables touched while bulk mode is on must be made durable
+    /// by a subsequent `flush()` call. Default impl: no-op.
+    fn set_bulk_mode(&self, _enabled: bool) {}
+
+    /// Force any deferred writes to disk. No-op for engines that don't buffer.
+    async fn flush(&self) -> Result<()> {
+        Ok(())
+    }
 }
 pub mod batch;
 pub use batch::BatchInsert;

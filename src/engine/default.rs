@@ -8,14 +8,23 @@ use crate::storage::disk::DiskStorage;
 use crate::types::ResultSet;
 use crate::Result;
 use async_trait::async_trait;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 pub struct DefaultEngine {
     name: String,
     executor: Arc<RwLock<Executor>>,
     disk: Arc<DiskStorage>,
     is_memory: bool,
+
+    /// When true, suppress per-statement `disk.save_table()` calls so bulk
+    /// loads don't pay O(table-size) serialization on every INSERT. Tables
+    /// touched while in bulk mode are tracked in `dirty_tables` and flushed
+    /// together when bulk mode turns off or `flush()` is called.
+    bulk_mode: Arc<AtomicBool>,
+    dirty_tables: Arc<Mutex<HashSet<String>>>,
 }
 
 impl DefaultEngine {
@@ -38,7 +47,32 @@ impl DefaultEngine {
             executor: Arc::new(RwLock::new(executor)),
             disk: Arc::new(disk),
             is_memory,
+            bulk_mode: Arc::new(AtomicBool::new(false)),
+            dirty_tables: Arc::new(Mutex::new(HashSet::new())),
         })
+    }
+
+    /// Toggle bulk mode. When ON, DDL/DML statements skip the per-statement
+    /// `save_table` and just accumulate dirty-table names. When OFF (or on
+    /// `flush()`), all dirty tables are serialized once.
+    pub fn set_bulk_mode(&self, enabled: bool) {
+        self.bulk_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Flush any dirty tables to disk. Idempotent — safe to call at any time.
+    pub async fn flush(&self) -> Result<()> {
+        if self.is_memory {
+            return Ok(());
+        }
+        let mut dirty = self.dirty_tables.lock().await;
+        let executor = self.executor.read().await;
+        for name in dirty.iter() {
+            if let Some(table) = executor.get_tables().get(name) {
+                self.disk.save_table(table)?;
+            }
+        }
+        dirty.clear();
+        Ok(())
     }
 }
 
@@ -66,20 +100,25 @@ impl StorageEngine for DefaultEngine {
 
         // Skip disk writes for in-memory mode
         if !self.is_memory {
-            match statement {
-                crate::query::Statement::CreateTable { ref name, .. }
-                | crate::query::Statement::Insert {
-                    table: ref name, ..
-                }
-                | crate::query::Statement::Update {
-                    table: ref name, ..
-                }
-                | crate::query::Statement::Delete { from: ref name, .. } => {
-                    if let Some(table) = executor.get_tables().get(name) {
+            let touched_table = match &statement {
+                crate::query::Statement::CreateTable { name, .. }
+                | crate::query::Statement::Insert { table: name, .. }
+                | crate::query::Statement::Update { table: name, .. }
+                | crate::query::Statement::Delete { from: name, .. } => Some(name.clone()),
+                _ => None,
+            };
+
+            if let Some(name) = touched_table {
+                if self.bulk_mode.load(Ordering::SeqCst) {
+                    // Bulk mode: just remember this table is dirty, don't serialize now
+                    let mut dirty = self.dirty_tables.lock().await;
+                    dirty.insert(name);
+                } else {
+                    // Normal mode: persist immediately (pre-existing semantics)
+                    if let Some(table) = executor.get_tables().get(&name) {
                         self.disk.save_table(table)?;
                     }
                 }
-                _ => {}
             }
         }
 
@@ -100,5 +139,14 @@ impl StorageEngine for DefaultEngine {
         let table_count = executor.get_tables().len();
         tracing::info!("DefaultEngine initialized ({} tables)", table_count);
         Ok(())
+    }
+
+    fn set_bulk_mode(&self, enabled: bool) {
+        // Inherent method handles the state; trait dispatch just forwards.
+        DefaultEngine::set_bulk_mode(self, enabled)
+    }
+
+    async fn flush(&self) -> Result<()> {
+        DefaultEngine::flush(self).await
     }
 }

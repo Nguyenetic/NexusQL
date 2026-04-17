@@ -196,6 +196,46 @@ impl NexusDB {
         self.inner.is_some()
     }
 
+    /// Toggle bulk-load mode. When ON, subsequent DDL/DML skips per-statement
+    /// disk persistence — state lives in memory until `flush()` or `close()`.
+    /// Typical usage:
+    ///     db.set_bulk_mode(True)
+    ///     for stmt in ...:
+    ///         db.execute(stmt)
+    ///     db.flush()
+    ///     db.set_bulk_mode(False)
+    fn set_bulk_mode(&self, py: Python<'_>, enabled: bool) -> PyResult<()> {
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("NexusDB closed"))?
+            .clone();
+        let rt = self
+            .rt
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("NexusDB closed"))?
+            .clone();
+        py.allow_threads(move || rt.block_on(async move { db.set_bulk_mode(enabled).await }));
+        Ok(())
+    }
+
+    /// Flush any deferred writes to disk. Idempotent.
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("NexusDB closed"))?
+            .clone();
+        let rt = self
+            .rt
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("NexusDB closed"))?
+            .clone();
+        py.allow_threads(move || rt.block_on(async move { db.flush().await }))
+            .map_err(rt_err)?;
+        Ok(())
+    }
+
     /// Close the database. The underlying runtime is dropped; subsequent
     /// execute() calls raise RuntimeError("NexusDB closed").
     fn close(&mut self) -> PyResult<()> {

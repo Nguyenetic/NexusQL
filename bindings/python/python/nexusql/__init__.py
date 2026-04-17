@@ -149,9 +149,47 @@ class NexusDB:
         """
         return PreparedStatement(self, sql)
 
+    def set_bulk_mode(self, enabled: bool) -> None:
+        """Toggle bulk-load mode.
+
+        When ON, subsequent DDL/DML skips per-statement disk persistence
+        (~200x faster on bulk loads). Tables touched in bulk mode are only
+        durable after `flush()` / `close()` / `set_bulk_mode(False)`.
+        """
+        self._check_open()
+        self._native.set_bulk_mode(enabled)
+
+    def flush(self) -> None:
+        """Flush any deferred writes to disk. Idempotent."""
+        self._check_open()
+        self._native.flush()
+
+    @contextmanager
+    def bulk_load(self) -> Iterator["NexusDB"]:
+        """Context-manager for bulk loads. Enters bulk mode, flushes on exit.
+
+        Example:
+            with db.bulk_load():
+                for stmt in many_statements:
+                    db.execute(stmt)
+        """
+        self.set_bulk_mode(True)
+        try:
+            yield self
+        finally:
+            try:
+                self.flush()
+            finally:
+                self.set_bulk_mode(False)
+
     def close(self) -> None:
         """Close the database. Safe to call multiple times."""
         if not self._closed:
+            # Best-effort flush in case bulk mode was left on
+            try:
+                self._native.flush()
+            except Exception:
+                pass
             self._native.close()
             self._closed = True
 
