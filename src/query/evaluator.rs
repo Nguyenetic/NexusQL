@@ -1,6 +1,7 @@
 //! WHERE Clause Expression Evaluator
 //! PROPRIETARY
 
+use crate::engine::hdc::{BscVec, Hypervector, MapVec};
 use crate::query::ast::{BinaryOperator, Expr, Parameter};
 use crate::types::{Row, Value};
 use std::collections::HashMap;
@@ -494,14 +495,512 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams)
             }
         }
 
+        // --- HDC (Hyperdimensional Computing) functions ---
+        //
+        // Hypervectors are carried through SQL as Value::Blob holding the
+        // variant-tagged byte format produced by Hypervector::to_bytes().
+        // Callers can store them in any Blob-typed column.
+
+        "HV_RANDOM" => {
+            // hv_random(dim INT, variant TEXT[, seed BIGINT])
+            //   -> Blob encoding a fresh hypervector
+            if args.len() < 2 || args.len() > 3 {
+                return Value::Null;
+            }
+            let dim = match evaluate_expr(row, &args[0], params) {
+                Value::Integer(n) if n > 0 => n as usize,
+                _ => return Value::Null,
+            };
+            let variant = match evaluate_expr(row, &args[1], params) {
+                Value::Text(s) => s.to_uppercase(),
+                _ => return Value::Null,
+            };
+            // Seed defaults to dim so callers writing hv_random(D, 'MAP')
+            // get a deterministic-but-arbitrary result; explicit seed
+            // overrides for reproducibility.
+            let seed = if args.len() == 3 {
+                match evaluate_expr(row, &args[2], params) {
+                    Value::Integer(n) => n as u64,
+                    Value::Null => dim as u64,
+                    _ => return Value::Null,
+                }
+            } else {
+                dim as u64
+            };
+            let hv = match variant.as_str() {
+                "BSC" => Hypervector::Bsc(BscVec::random_seeded(dim, seed)),
+                "MAP" => Hypervector::Map(MapVec::random_seeded(dim, seed)),
+                _ => return Value::Null, // unknown variant
+            };
+            Value::Blob(hv.to_bytes())
+        }
+
+        "HV_BIND" => {
+            // hv_bind(a BLOB, b BLOB) -> Blob of A ⊗ B
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let a = blob_as_hv(&evaluate_expr(row, &args[0], params));
+            let b = blob_as_hv(&evaluate_expr(row, &args[1], params));
+            match (a, b) {
+                (Some(a), Some(b)) => match a.bind(&b) {
+                    Ok(c) => Value::Blob(c.to_bytes()),
+                    Err(_) => Value::Null,
+                },
+                _ => Value::Null,
+            }
+        }
+
+        "HV_BUNDLE" => {
+            // hv_bundle(a1, a2, ...) -> Blob of bundle (scalar form).
+            // Aggregate form (hv_bundle over a grouping) lands in PR 6
+            // together with SQL-side aggregation wiring.
+            if args.is_empty() {
+                return Value::Null;
+            }
+            let hvs: Vec<Hypervector> = args
+                .iter()
+                .filter_map(|arg| blob_as_hv(&evaluate_expr(row, arg, params)))
+                .collect();
+            if hvs.len() != args.len() {
+                return Value::Null; // one of the inputs didn't decode
+            }
+            let refs: Vec<&Hypervector> = hvs.iter().collect();
+            match Hypervector::bundle(&refs) {
+                Ok(c) => Value::Blob(c.to_bytes()),
+                Err(_) => Value::Null,
+            }
+        }
+
+        "HV_PERMUTE" => {
+            // hv_permute(a BLOB, shift INT) -> Blob of ρ(A, shift)
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let a = blob_as_hv(&evaluate_expr(row, &args[0], params));
+            let shift = match evaluate_expr(row, &args[1], params) {
+                Value::Integer(n) => n as isize,
+                _ => return Value::Null,
+            };
+            a.map(|hv| Value::Blob(hv.permute(shift).to_bytes()))
+                .unwrap_or(Value::Null)
+        }
+
+        "HV_SIMILARITY" => {
+            // hv_similarity(a BLOB, b BLOB) -> REAL in [-1, +1]
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let a = blob_as_hv(&evaluate_expr(row, &args[0], params));
+            let b = blob_as_hv(&evaluate_expr(row, &args[1], params));
+            match (a, b) {
+                (Some(a), Some(b)) => match a.similarity(&b) {
+                    Ok(s) => Value::Float(ordered_float::OrderedFloat(s as f64)),
+                    Err(_) => Value::Null,
+                },
+                _ => Value::Null,
+            }
+        }
+
+        "HV_VARIANT" => {
+            // hv_variant(a BLOB) -> TEXT — "BSC" | "MAP" | ...
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            blob_as_hv(&evaluate_expr(row, &args[0], params))
+                .map(|hv| Value::Text(hv.variant_name().to_string()))
+                .unwrap_or(Value::Null)
+        }
+
+        "HV_DIM" => {
+            // hv_dim(a BLOB) -> INTEGER — conceptual dimension
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            blob_as_hv(&evaluate_expr(row, &args[0], params))
+                .map(|hv| Value::Integer(hv.dim() as i64))
+                .unwrap_or(Value::Null)
+        }
+
         // Unknown function
         _ => Value::Null,
+    }
+}
+
+/// Decode a `Value::Blob` as a `Hypervector`. Returns `None` for any
+/// other `Value` kind or if the bytes don't parse (corrupt / wrong
+/// variant tag). Centralises the conversion so every hv_* function
+/// handles NULL and type-mismatch identically.
+fn blob_as_hv(v: &Value) -> Option<Hypervector> {
+    match v {
+        Value::Blob(b) => Hypervector::from_bytes(b).ok(),
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- HDC SQL function surface ----
+    //
+    // These tests exercise hv_* via the `evaluate_expr` entry point —
+    // the same path the executor takes. No schema / table needed; each
+    // test builds an Expr::Function AST literal and calls the evaluator
+    // directly. If these pass, the executor will too.
+
+    fn hv_call(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Function {
+            name: name.to_string(),
+            args,
+        }
+    }
+
+    fn lit(v: Value) -> Expr {
+        Expr::Literal(v)
+    }
+
+    fn empty_row() -> Row {
+        Row::new(vec![], vec![])
+    }
+
+    #[test]
+    fn hv_random_bsc_returns_blob_with_correct_dim() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let expr = hv_call(
+            "HV_RANDOM",
+            vec![
+                lit(Value::Integer(10_000)),
+                lit(Value::Text("BSC".into())),
+                lit(Value::Integer(42)),
+            ],
+        );
+        let result = evaluate_expr(&row, &expr, &params);
+        let Value::Blob(bytes) = &result else {
+            panic!("expected Blob, got {:?}", result);
+        };
+        // Round-trip: decode + verify dim
+        let dim_expr = hv_call("HV_DIM", vec![lit(Value::Blob(bytes.clone()))]);
+        assert_eq!(
+            evaluate_expr(&row, &dim_expr, &params),
+            Value::Integer(10_000)
+        );
+        let variant_expr = hv_call("HV_VARIANT", vec![lit(Value::Blob(bytes.clone()))]);
+        assert_eq!(
+            evaluate_expr(&row, &variant_expr, &params),
+            Value::Text("BSC".into())
+        );
+    }
+
+    #[test]
+    fn hv_random_map_matches_explicit_variant() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let expr = hv_call(
+            "HV_RANDOM",
+            vec![
+                lit(Value::Integer(1000)),
+                lit(Value::Text("MAP".into())),
+                lit(Value::Integer(7)),
+            ],
+        );
+        let Value::Blob(bytes) = evaluate_expr(&row, &expr, &params) else {
+            panic!("expected Blob");
+        };
+        assert_eq!(
+            evaluate_expr(&row, &hv_call("HV_VARIANT", vec![lit(Value::Blob(bytes))]), &params),
+            Value::Text("MAP".into())
+        );
+    }
+
+    #[test]
+    fn hv_random_unknown_variant_returns_null() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let expr = hv_call(
+            "HV_RANDOM",
+            vec![
+                lit(Value::Integer(1000)),
+                lit(Value::Text("QUANTUM".into())), // not a real variant
+                lit(Value::Integer(1)),
+            ],
+        );
+        assert_eq!(evaluate_expr(&row, &expr, &params), Value::Null);
+    }
+
+    #[test]
+    fn hv_similarity_of_same_blob_is_one() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let Value::Blob(bytes) = evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_RANDOM",
+                vec![
+                    lit(Value::Integer(10_000)),
+                    lit(Value::Text("MAP".into())),
+                    lit(Value::Integer(99)),
+                ],
+            ),
+            &params,
+        ) else {
+            panic!("expected Blob");
+        };
+        let sim = evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_SIMILARITY",
+                vec![
+                    lit(Value::Blob(bytes.clone())),
+                    lit(Value::Blob(bytes)),
+                ],
+            ),
+            &params,
+        );
+        assert_eq!(sim, Value::Float(ordered_float::OrderedFloat(1.0)));
+    }
+
+    #[test]
+    fn hv_bind_is_self_inverse_through_sql() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let mk = |seed: i64| -> Vec<u8> {
+            match evaluate_expr(
+                &row,
+                &hv_call(
+                    "HV_RANDOM",
+                    vec![
+                        lit(Value::Integer(10_000)),
+                        lit(Value::Text("MAP".into())),
+                        lit(Value::Integer(seed)),
+                    ],
+                ),
+                &params,
+            ) {
+                Value::Blob(b) => b,
+                _ => panic!("expected Blob"),
+            }
+        };
+        let a = mk(11);
+        let b = mk(22);
+        let bound = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_BIND",
+                vec![lit(Value::Blob(a.clone())), lit(Value::Blob(b.clone()))],
+            ),
+            &params,
+        ) {
+            Value::Blob(v) => v,
+            _ => panic!("expected Blob"),
+        };
+        // (A ⊗ B) ⊗ B == A — verified via hv_similarity == 1.0
+        let recovered = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_BIND",
+                vec![lit(Value::Blob(bound)), lit(Value::Blob(b))],
+            ),
+            &params,
+        ) {
+            Value::Blob(v) => v,
+            _ => panic!("expected Blob"),
+        };
+        let sim = evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_SIMILARITY",
+                vec![lit(Value::Blob(a)), lit(Value::Blob(recovered))],
+            ),
+            &params,
+        );
+        assert_eq!(sim, Value::Float(ordered_float::OrderedFloat(1.0)));
+    }
+
+    #[test]
+    fn hv_similarity_across_variants_returns_null() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let bsc = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_RANDOM",
+                vec![
+                    lit(Value::Integer(1000)),
+                    lit(Value::Text("BSC".into())),
+                    lit(Value::Integer(1)),
+                ],
+            ),
+            &params,
+        ) {
+            Value::Blob(b) => b,
+            _ => panic!(),
+        };
+        let map = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_RANDOM",
+                vec![
+                    lit(Value::Integer(1000)),
+                    lit(Value::Text("MAP".into())),
+                    lit(Value::Integer(1)),
+                ],
+            ),
+            &params,
+        ) {
+            Value::Blob(b) => b,
+            _ => panic!(),
+        };
+        assert_eq!(
+            evaluate_expr(
+                &row,
+                &hv_call("HV_SIMILARITY", vec![lit(Value::Blob(bsc)), lit(Value::Blob(map))]),
+                &params,
+            ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn hv_permute_round_trip() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let a = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_RANDOM",
+                vec![
+                    lit(Value::Integer(10_000)),
+                    lit(Value::Text("MAP".into())),
+                    lit(Value::Integer(100)),
+                ],
+            ),
+            &params,
+        ) {
+            Value::Blob(b) => b,
+            _ => panic!(),
+        };
+        // ρ(ρ(A, 123), -123) == A
+        let forward = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_PERMUTE",
+                vec![lit(Value::Blob(a.clone())), lit(Value::Integer(123))],
+            ),
+            &params,
+        ) {
+            Value::Blob(b) => b,
+            _ => panic!(),
+        };
+        let back = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_PERMUTE",
+                vec![lit(Value::Blob(forward)), lit(Value::Integer(-123))],
+            ),
+            &params,
+        ) {
+            Value::Blob(b) => b,
+            _ => panic!(),
+        };
+        let sim = evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_SIMILARITY",
+                vec![lit(Value::Blob(a)), lit(Value::Blob(back))],
+            ),
+            &params,
+        );
+        assert_eq!(sim, Value::Float(ordered_float::OrderedFloat(1.0)));
+    }
+
+    #[test]
+    fn hv_bundle_scalar_form_is_similar_to_each_input() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let mk = |seed: i64| -> Vec<u8> {
+            match evaluate_expr(
+                &row,
+                &hv_call(
+                    "HV_RANDOM",
+                    vec![
+                        lit(Value::Integer(10_000)),
+                        lit(Value::Text("MAP".into())),
+                        lit(Value::Integer(seed)),
+                    ],
+                ),
+                &params,
+            ) {
+                Value::Blob(b) => b,
+                _ => panic!(),
+            }
+        };
+        let a = mk(1);
+        let b = mk(2);
+        let c = mk(3);
+        let bundle = match evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_BUNDLE",
+                vec![
+                    lit(Value::Blob(a.clone())),
+                    lit(Value::Blob(b.clone())),
+                    lit(Value::Blob(c.clone())),
+                ],
+            ),
+            &params,
+        ) {
+            Value::Blob(v) => v,
+            _ => panic!(),
+        };
+        for seed_bytes in [a, b, c] {
+            let Value::Float(sim) = evaluate_expr(
+                &row,
+                &hv_call(
+                    "HV_SIMILARITY",
+                    vec![lit(Value::Blob(bundle.clone())), lit(Value::Blob(seed_bytes))],
+                ),
+                &params,
+            ) else {
+                panic!("expected Float");
+            };
+            // Each component should remain recognizable in the bundle
+            // (theoretical ≈ 1/√3 ≈ 0.577 for 3-way MAP bundle).
+            assert!(
+                sim.into_inner() > 0.3,
+                "bundle component similarity too low: {}",
+                sim.into_inner()
+            );
+        }
+    }
+
+    #[test]
+    fn hv_functions_return_null_on_non_blob_input() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let bogus = lit(Value::Text("not a hypervector".into()));
+        for name in ["HV_BIND", "HV_SIMILARITY"] {
+            assert_eq!(
+                evaluate_expr(
+                    &row,
+                    &hv_call(name, vec![bogus.clone(), bogus.clone()]),
+                    &params,
+                ),
+                Value::Null,
+                "{name} should return NULL on text input"
+            );
+        }
+        for name in ["HV_VARIANT", "HV_DIM"] {
+            assert_eq!(
+                evaluate_expr(&row, &hv_call(name, vec![bogus.clone()]), &params),
+                Value::Null,
+                "{name} should return NULL on text input"
+            );
+        }
+    }
+
+    // ---- Original evaluator tests continue ----
 
     #[test]
     fn test_evaluate_eq() {
