@@ -32,6 +32,7 @@ impl Ord for Neighbor {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct HNSWIndex {
     vectors: Vec<Array1<f32>>,
     graph: Vec<Vec<usize>>,  // Simplified: single-layer for now
