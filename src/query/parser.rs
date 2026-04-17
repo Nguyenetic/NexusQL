@@ -1884,24 +1884,40 @@ impl QueryParser {
         }
     }
 
-    /// Parse vector literal from string like '[0.1, 0.2, 0.3]'
+    /// Parse vector literal from string like '[0.1, 0.2, 0.3]'.
+    ///
+    /// Only recognises all-numeric, comma-separated elements so that JSON
+    /// arrays (e.g. `[{"index": 1}]`) or other bracketed text fall through
+    /// to plain-text storage rather than erroring.
     fn parse_vector_literal(&self, s: &str) -> Result<Value> {
-        let trimmed = s.trim_start_matches('[').trim_end_matches(']');
-        let mut vector = Vec::new();
+        if let Some(v) = self.try_parse_vector_literal(s) {
+            Ok(Value::Vector(v))
+        } else {
+            // Not actually a numeric vector — preserve the original text
+            // rather than erroring. Common case: JSON blobs or display
+            // strings that happen to use `[...]`.
+            Ok(Value::Text(s.to_string()))
+        }
+    }
 
-        for part in trimmed.split(',') {
+    fn try_parse_vector_literal(&self, s: &str) -> Option<Vec<f32>> {
+        let trimmed = s.trim();
+        if !(trimmed.starts_with('[') && trimmed.ends_with(']')) {
+            return None;
+        }
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if inner.trim().is_empty() {
+            return None; // empty brackets — treat as text, not empty vector
+        }
+        let mut vector = Vec::new();
+        for part in inner.split(',') {
             let part = part.trim();
-            if let Ok(f) = part.parse::<f32>() {
-                vector.push(f);
-            } else {
-                return Err(NexusError::ParseError(format!(
-                    "Invalid vector element: {}",
-                    part
-                )));
+            match part.parse::<f32>() {
+                Ok(f) => vector.push(f),
+                Err(_) => return None,
             }
         }
-
-        Ok(Value::Vector(vector))
+        Some(vector)
     }
 
     fn extract_from_clause(&self, from: &Vec<sql_ast::TableWithJoins>) -> Result<FromClause> {
