@@ -17,6 +17,7 @@ pub mod variants;
 
 pub use error::HdcError;
 pub use variants::bsc::BscVec;
+pub use variants::map::MapVec;
 pub use variants::HvOps;
 
 use crate::engine::{EngineCapabilities, Query, QueryCost, StorageEngine};
@@ -37,12 +38,14 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub enum Hypervector {
     Bsc(BscVec),
+    Map(MapVec),
 }
 
 // Variant tags written as the first byte of the on-disk format. Kept
 // here (not in the individual variant modules) so the numeric space is
 // canonical and visible at a glance.
 const TAG_BSC: u8 = 0;
+const TAG_MAP: u8 = 1;
 
 impl Hypervector {
     /// Human-readable variant name for error messages and SQL
@@ -50,6 +53,7 @@ impl Hypervector {
     pub fn variant_name(&self) -> &'static str {
         match self {
             Self::Bsc(_) => "BSC",
+            Self::Map(_) => "MAP",
         }
     }
 
@@ -58,14 +62,18 @@ impl Hypervector {
     pub fn dim(&self) -> usize {
         match self {
             Self::Bsc(v) => v.dim(),
+            Self::Map(v) => v.dim(),
         }
     }
 
-    /// Convenience: BSC variant from a `u64` seed. Callers that want
-    /// non-BSC variants use the matching `BscVec::random_seeded` /
-    /// `MapVec::random_seeded` / ... directly and wrap in this enum.
+    /// Convenience: BSC variant from a `u64` seed.
     pub fn bsc_random_seeded(dim: usize, seed: u64) -> Self {
         Self::Bsc(BscVec::random_seeded(dim, seed))
+    }
+
+    /// Convenience: MAP variant from a `u64` seed.
+    pub fn map_random_seeded(dim: usize, seed: u64) -> Self {
+        Self::Map(MapVec::random_seeded(dim, seed))
     }
 
     /// Binding: `A ⊗ B`. Returns `VariantMismatch` if the two vectors
@@ -74,6 +82,11 @@ impl Hypervector {
     pub fn bind(&self, other: &Self) -> std::result::Result<Self, HdcError> {
         match (self, other) {
             (Self::Bsc(a), Self::Bsc(b)) => a.bind(b).map(Self::Bsc),
+            (Self::Map(a), Self::Map(b)) => a.bind(b).map(Self::Map),
+            _ => Err(HdcError::VariantMismatch {
+                left: self.variant_name(),
+                right: other.variant_name(),
+            }),
         }
     }
 
@@ -98,9 +111,20 @@ impl Hypervector {
                     .iter()
                     .map(|v| match v {
                         Self::Bsc(b) => b,
+                        _ => unreachable!("variant check passed above"),
                     })
                     .collect();
                 BscVec::bundle(&inners).map(Self::Bsc)
+            }
+            Self::Map(_) => {
+                let inners: Vec<&MapVec> = vectors
+                    .iter()
+                    .map(|v| match v {
+                        Self::Map(m) => m,
+                        _ => unreachable!("variant check passed above"),
+                    })
+                    .collect();
+                MapVec::bundle(&inners).map(Self::Map)
             }
         }
     }
@@ -109,6 +133,7 @@ impl Hypervector {
     pub fn permute(&self, shift: isize) -> Self {
         match self {
             Self::Bsc(v) => Self::Bsc(v.permute(shift)),
+            Self::Map(v) => Self::Map(v.permute(shift)),
         }
     }
 
@@ -116,20 +141,24 @@ impl Hypervector {
     pub fn similarity(&self, other: &Self) -> std::result::Result<f32, HdcError> {
         match (self, other) {
             (Self::Bsc(a), Self::Bsc(b)) => a.similarity(b),
+            (Self::Map(a), Self::Map(b)) => a.similarity(b),
+            _ => Err(HdcError::VariantMismatch {
+                left: self.variant_name(),
+                right: other.variant_name(),
+            }),
         }
     }
 
     /// Serialize to bytes with a leading variant tag.
     pub fn to_bytes(&self) -> Vec<u8> {
-        match self {
-            Self::Bsc(v) => {
-                let body = v.to_bytes();
-                let mut out = Vec::with_capacity(1 + body.len());
-                out.push(TAG_BSC);
-                out.extend_from_slice(&body);
-                out
-            }
-        }
+        let (tag, body) = match self {
+            Self::Bsc(v) => (TAG_BSC, v.to_bytes()),
+            Self::Map(v) => (TAG_MAP, v.to_bytes()),
+        };
+        let mut out = Vec::with_capacity(1 + body.len());
+        out.push(tag);
+        out.extend_from_slice(&body);
+        out
     }
 
     /// Deserialize from bytes. Reads the variant tag and dispatches.
@@ -141,6 +170,7 @@ impl Hypervector {
         }
         match bytes[0] {
             TAG_BSC => Ok(Self::Bsc(BscVec::from_bytes(&bytes[1..])?)),
+            TAG_MAP => Ok(Self::Map(MapVec::from_bytes(&bytes[1..])?)),
             other => Err(HdcError::Serialization(format!(
                 "unknown variant tag byte: {other}"
             ))),
@@ -309,5 +339,71 @@ mod enum_tests {
             Hypervector::from_bytes(&[99, 0, 0, 0, 0, 0, 0, 0, 0]),
             Err(HdcError::Serialization(_))
         ));
+    }
+
+    // --- MAP variant through the enum ---
+
+    #[test]
+    fn map_variant_identifies_correctly() {
+        let hv = Hypervector::map_random_seeded(1000, 1);
+        assert_eq!(hv.variant_name(), "MAP");
+        assert_eq!(hv.dim(), 1000);
+    }
+
+    #[test]
+    fn map_bind_through_enum_is_self_inverse() {
+        let a = Hypervector::map_random_seeded(10_000, 11);
+        let b = Hypervector::map_random_seeded(10_000, 22);
+        let c = a.bind(&b).unwrap();
+        assert_eq!(c.variant_name(), "MAP");
+        let recovered = c.bind(&b).unwrap();
+        assert_eq!(recovered.similarity(&a).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn cross_variant_bind_returns_mismatch() {
+        let bsc = Hypervector::bsc_random_seeded(1000, 1);
+        let map = Hypervector::map_random_seeded(1000, 1);
+        let err = bsc.bind(&map).unwrap_err();
+        assert!(matches!(
+            err,
+            HdcError::VariantMismatch {
+                left: "BSC",
+                right: "MAP"
+            }
+        ));
+    }
+
+    #[test]
+    fn cross_variant_similarity_returns_mismatch() {
+        let bsc = Hypervector::bsc_random_seeded(1000, 1);
+        let map = Hypervector::map_random_seeded(1000, 1);
+        assert!(matches!(
+            bsc.similarity(&map),
+            Err(HdcError::VariantMismatch {
+                left: "BSC",
+                right: "MAP"
+            })
+        ));
+    }
+
+    #[test]
+    fn mixed_variant_bundle_errors() {
+        let bsc = Hypervector::bsc_random_seeded(1000, 1);
+        let map = Hypervector::map_random_seeded(1000, 1);
+        assert!(matches!(
+            Hypervector::bundle(&[&bsc, &map]),
+            Err(HdcError::VariantMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn map_roundtrip_bytes_preserves_tag() {
+        let a = Hypervector::map_random_seeded(10_000, 42);
+        let bytes = a.to_bytes();
+        assert_eq!(bytes[0], TAG_MAP);
+        let b = Hypervector::from_bytes(&bytes).unwrap();
+        assert_eq!(a.variant_name(), b.variant_name());
+        assert_eq!(a.similarity(&b).unwrap(), 1.0);
     }
 }

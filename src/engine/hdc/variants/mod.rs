@@ -6,6 +6,7 @@
 //! dispatch inside each variant's math.
 
 pub mod bsc;
+pub mod map;
 
 use crate::engine::hdc::error::HdcError;
 use rand::RngCore;
