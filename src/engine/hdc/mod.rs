@@ -1,9 +1,30 @@
-//! HDC Engine - Hyperdimensional Computing
-//! PROPRIETARY - Ultra-Energy-Efficient Intelligence
+//! HDC Engine — Hyperdimensional Computing
+//!
+//! Vector Symbolic Architecture primitives (BSC today; MAP / HRR / FHRR /
+//! SCH land in later PRs). Public surface for callers inside NexusQL:
+//!
+//! - `Hypervector` — current type alias to `BscVec`. Becomes an enum once
+//!   PR 3 adds multi-variant support.
+//! - `variants::bsc::BscVec` — BSC variant, Binary Spatter Codes.
+//! - `variants::HvOps` — trait every variant implements.
+//! - `error::HdcError` — shared error type.
 
-pub mod hypervector;
+pub mod error;
+pub mod hypervector; // backcompat shim, re-exports `Hypervector`
+pub mod variants;
 
-use self::hypervector::Hypervector;
+pub use error::HdcError;
+pub use variants::bsc::BscVec;
+pub use variants::HvOps;
+
+/// Public hypervector type.
+///
+/// Today this is a type alias to `BscVec` so existing callers compile
+/// unchanged. PR 3 converts it to a true enum (`Hypervector::Bsc(BscVec)`
+/// plus `::Map(MapVec)`, etc.) — at that point inherent methods go away
+/// and callers must match or use the dispatching methods on the enum.
+pub type Hypervector = BscVec;
+
 use crate::engine::{EngineCapabilities, Query, QueryCost, StorageEngine};
 use crate::types::{ResultSet, Row, Value};
 use crate::Result;
@@ -39,10 +60,15 @@ impl HDCEngine {
         let prototypes = self.prototypes.read().await;
 
         let mut best_class = None;
-        let mut best_similarity = 0.0;
+        let mut best_similarity = 0.0f32;
 
         for (class_name, prototype) in prototypes.iter() {
-            let similarity = input.similarity(prototype);
+            // similarity() now returns Result; mismatched dims would be a
+            // programming error at this layer (all prototypes share dim),
+            // so unwrap here is acceptable.
+            let similarity = input
+                .similarity(prototype)
+                .expect("classifier prototypes must share dimension");
             if similarity > best_similarity {
                 best_similarity = similarity;
                 best_class = Some(class_name.clone());
@@ -70,7 +96,7 @@ impl StorageEngine for HDCEngine {
 
     async fn execute(&self, _query: &Query) -> Result<ResultSet> {
         // Demo classification
-        let test_input = Hypervector::random(self.dimension, 999);
+        let test_input = Hypervector::random_seeded(self.dimension, 999);
 
         if let Some((class, confidence)) = self.classify(&test_input).await {
             let rows = vec![Row::new(
@@ -99,8 +125,8 @@ impl StorageEngine for HDCEngine {
         tracing::info!("HDC engine initialized (dimension: {})", self.dimension);
 
         // Create demo class prototypes
-        let class_a = Hypervector::random(self.dimension, 100);
-        let class_b = Hypervector::random(self.dimension, 200);
+        let class_a = Hypervector::random_seeded(self.dimension, 100);
+        let class_b = Hypervector::random_seeded(self.dimension, 200);
 
         self.add_class("category_a".to_string(), class_a).await;
         self.add_class("category_b".to_string(), class_b).await;
