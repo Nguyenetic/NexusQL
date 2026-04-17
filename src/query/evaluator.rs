@@ -501,6 +501,52 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams)
         // variant-tagged byte format produced by Hypervector::to_bytes().
         // Callers can store them in any Blob-typed column.
 
+        "HV_ATOM" => {
+            // hv_atom(kind TEXT, key TEXT, dim INT, variant TEXT)
+            //   -> Blob of a deterministic hypervector derived from
+            //      a FNV-1a 64-bit hash of "kind::key".
+            //
+            // This is the missing piece for SQL-side record encoding:
+            // every distinct categorical value needs a stable hypervector
+            // that's the SAME across queries but DIFFERENT per (kind, key).
+            // Using the byte-string as a seed is the natural shape — no
+            // caller has to pre-compute numeric seeds.
+            if args.len() != 4 {
+                return Value::Null;
+            }
+            let kind = match evaluate_expr(row, &args[0], params) {
+                Value::Text(s) => s,
+                _ => return Value::Null,
+            };
+            let key = match evaluate_expr(row, &args[1], params) {
+                Value::Text(s) => s,
+                _ => return Value::Null,
+            };
+            let dim = match evaluate_expr(row, &args[2], params) {
+                Value::Integer(n) if n > 0 => n as usize,
+                _ => return Value::Null,
+            };
+            let variant = match evaluate_expr(row, &args[3], params) {
+                Value::Text(s) => s.to_uppercase(),
+                _ => return Value::Null,
+            };
+            // FNV-1a 64-bit over "kind::key". Deterministic, cheap, no
+            // external crypto-hash dep. The RNG seeded from this value
+            // already produces quasi-orthogonal vectors for distinct keys.
+            let combined = format!("{kind}::{key}");
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in combined.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            let hv = match variant.as_str() {
+                "BSC" => Hypervector::Bsc(BscVec::random_seeded(dim, h)),
+                "MAP" => Hypervector::Map(MapVec::random_seeded(dim, h)),
+                _ => return Value::Null,
+            };
+            Value::Blob(hv.to_bytes())
+        }
+
         "HV_RANDOM" => {
             // hv_random(dim INT, variant TEXT[, seed BIGINT])
             //   -> Blob encoding a fresh hypervector
@@ -973,6 +1019,68 @@ mod tests {
                 sim.into_inner()
             );
         }
+    }
+
+    #[test]
+    fn hv_atom_is_deterministic_and_quasi_orthogonal() {
+        let row = empty_row();
+        let params = QueryParams::default();
+        let mk = |kind: &str, key: &str| -> Vec<u8> {
+            match evaluate_expr(
+                &row,
+                &hv_call(
+                    "HV_ATOM",
+                    vec![
+                        lit(Value::Text(kind.into())),
+                        lit(Value::Text(key.into())),
+                        lit(Value::Integer(10_000)),
+                        lit(Value::Text("MAP".into())),
+                    ],
+                ),
+                &params,
+            ) {
+                Value::Blob(b) => b,
+                _ => panic!("expected Blob"),
+            }
+        };
+
+        // Determinism: same (kind, key) -> same bytes
+        assert_eq!(mk("role", "status"), mk("role", "status"));
+
+        // Different keys under the same kind are quasi-orthogonal
+        let a = mk("role", "status");
+        let b = mk("role", "reason");
+        let sim = evaluate_expr(
+            &row,
+            &hv_call("HV_SIMILARITY", vec![lit(Value::Blob(a)), lit(Value::Blob(b))]),
+            &params,
+        );
+        let Value::Float(s) = sim else {
+            panic!("expected Float");
+        };
+        assert!(
+            s.into_inner().abs() < 0.05,
+            "different atoms should be quasi-orthogonal: sim={}",
+            s.into_inner()
+        );
+
+        // Different kinds under the same key are also distinct
+        let c = mk("val", "status");
+        let sim2 = evaluate_expr(
+            &row,
+            &hv_call(
+                "HV_SIMILARITY",
+                vec![
+                    lit(Value::Blob(mk("role", "status"))),
+                    lit(Value::Blob(c)),
+                ],
+            ),
+            &params,
+        );
+        let Value::Float(s2) = sim2 else {
+            panic!()
+        };
+        assert!(s2.into_inner().abs() < 0.05);
     }
 
     #[test]
