@@ -78,6 +78,7 @@ impl StorageEngine for ColBERTEngine {
     fn capabilities(&self) -> EngineCapabilities {
         EngineCapabilities {
             semantic_search: true,
+            sql: false, // ColBERT does not parse/execute standard SQL
             ..Default::default()
         }
     }

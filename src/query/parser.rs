@@ -1458,6 +1458,43 @@ impl QueryParser {
                 })
             }
 
+            // Unary +/-/NOT. sqlparser emits negative numeric literals as
+            // UnaryOp(Minus, Number(...)); without this branch every INSERT
+            // with a negative value fails to parse. Fold `-<literal>` into a
+            // negated Literal; unary `+` is a no-op; `NOT x` becomes `x = false`.
+            sql_ast::Expr::UnaryOp { op, expr: inner } => {
+                use sql_ast::UnaryOperator as UOP;
+                match op {
+                    UOP::Plus => self.convert_expr_to_ast(inner),
+                    UOP::Minus => {
+                        let inner_ast = self.convert_expr_to_ast(inner)?;
+                        match inner_ast {
+                            Expr::Literal(Value::Integer(n)) => {
+                                Ok(Expr::Literal(Value::Integer(-n)))
+                            }
+                            Expr::Literal(Value::Float(f)) => {
+                                Ok(Expr::Literal(Value::Float(-f)))
+                            }
+                            _ => Err(NexusError::ParseError(
+                                "Unary minus only supported on numeric literals".to_string(),
+                            )),
+                        }
+                    }
+                    UOP::Not => {
+                        let inner_ast = self.convert_expr_to_ast(inner)?;
+                        Ok(Expr::BinaryOp {
+                            left: Box::new(inner_ast),
+                            op: BinaryOperator::Eq,
+                            right: Box::new(Expr::Literal(Value::Boolean(false))),
+                        })
+                    }
+                    _ => Err(NexusError::ParseError(format!(
+                        "Unsupported unary operator: {:?}",
+                        op
+                    ))),
+                }
+            }
+
             _ => Err(NexusError::ParseError(format!(
                 "Unsupported expression in SELECT: {:?}",
                 expr

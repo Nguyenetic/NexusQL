@@ -63,6 +63,7 @@ impl StorageEngine for HDCEngine {
         EngineCapabilities {
             semantic_search: true,
             low_power: true, // ✓ Energy champion
+            sql: false,      // HDC does not parse/execute standard SQL
             ..Default::default()
         }
     }
