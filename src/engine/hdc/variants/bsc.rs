@@ -312,6 +312,92 @@ mod tests {
         ));
     }
 
+    // --- Permutation properties ---
+    // A well-formed permutation must satisfy three algebraic invariants.
+    // These catch off-by-one errors, bad wrap-around handling, and signed-
+    // shift bugs that a "does it compile" check would miss.
+
+    #[test]
+    fn test_permute_is_invertible() {
+        let a = BscVec::random_seeded(10_000, 17);
+        for shift in [1isize, 7, 63, 64, 100, 9999] {
+            let rotated = a.permute(shift);
+            let back = rotated.permute(-shift);
+            assert_eq!(
+                back.data, a.data,
+                "ρ(-shift) should undo ρ(shift) for shift={shift}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_permute_produces_orthogonal_output() {
+        // For any non-trivial shift the rotated vector must be quasi-
+        // orthogonal to the original. D=10_000 -> σ ≈ 0.01, 4σ = 0.04.
+        // Small shifts (e.g. 1) still produce near-random output because
+        // each bit lands on a position uncorrelated with its neighbour.
+        let a = BscVec::random_seeded(10_000, 23);
+        for shift in [1isize, 7, 63, 100, 5000] {
+            let p = a.permute(shift);
+            let s = p.similarity(&a).unwrap();
+            assert!(
+                s.abs() < 0.05,
+                "ρ(A) not orthogonal to A for shift={shift}: sim={s}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_permute_preserves_pairwise_similarity() {
+        // ρ is a bijection on {0,1}^D, so S(ρ(A), ρ(B)) == S(A, B) exactly.
+        let a = BscVec::random_seeded(10_000, 31);
+        let b = BscVec::random_seeded(10_000, 32);
+        let base = a.similarity(&b).unwrap();
+        for shift in [1isize, 10, 64, 999] {
+            let ra = a.permute(shift);
+            let rb = b.permute(shift);
+            let after = ra.similarity(&rb).unwrap();
+            // With tail-mask in place the rotation is an exact bijection,
+            // so equality is exact within f32 precision.
+            assert!(
+                (after - base).abs() < 1e-6,
+                "ρ should preserve pairwise similarity (shift={shift}): \
+                base={base} after={after}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_permute_full_cycle_returns_identity() {
+        // ρ^dim = identity for every vector.
+        let a = BscVec::random_seeded(1000, 41);
+        let rotated = a.permute(1000);
+        assert_eq!(rotated.data, a.data);
+    }
+
+    #[test]
+    fn test_permute_zero_shift_is_noop() {
+        let a = BscVec::random_seeded(10_000, 42);
+        assert_eq!(a.permute(0).data, a.data);
+    }
+
+    #[test]
+    fn test_permute_works_on_non_multiple_of_64_dim() {
+        // D=100 is not a multiple of 64, so the last chunk has 28 unused
+        // bits that must stay zero after rotation.
+        let a = BscVec::random_seeded(100, 7);
+        let p = a.permute(33);
+        let extra = 128 - 100;
+        let tail_mask: u64 = !0u64 << (64 - extra);
+        assert_eq!(
+            p.data[1] & tail_mask,
+            0,
+            "tail bits must stay masked after permute"
+        );
+        // And the round-trip still works on the ragged edge.
+        assert_eq!(p.permute(-33).data, a.data);
+    }
+
     #[test]
     fn test_mask_tail_keeps_form_canonical() {
         // dim=100 uses 2 u64 chunks; bits 100..128 must be zero on
