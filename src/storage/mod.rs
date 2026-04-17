@@ -43,6 +43,30 @@ struct TableData {
     next_auto_increment_id: i64,
 }
 
+/// Metadata written to `table:<name>:meta`. Rows live in separate
+/// `table:<name>:chunk:<nnnn>` keys so individual values stay under
+/// sled's inlined-value threshold and the blob heap stays empty.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TableMeta {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub chunk_count: u32,
+    #[serde(default)]
+    pub auto_increment_column: Option<String>,
+    #[serde(default)]
+    pub next_auto_increment_id: i64,
+}
+
+/// Borrowed serialization view of `TableMeta` — same wire format, no clones.
+#[derive(Serialize)]
+pub(crate) struct TableMetaSer<'a> {
+    pub name: &'a str,
+    pub columns: &'a Vec<String>,
+    pub chunk_count: u32,
+    pub auto_increment_column: &'a Option<String>,
+    pub next_auto_increment_id: i64,
+}
+
 /// Table storage with index support.
 #[derive(Debug, Clone)]
 pub struct Table {
