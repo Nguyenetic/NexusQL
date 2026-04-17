@@ -102,15 +102,23 @@ mod tests {
                     alias: None,
                 },
             ],
-            from: "users".to_string(),
+            from: FromClause {
+                table: "users".to_string(),
+                alias: None,
+                joins: vec![],
+            },
             where_clause: Some(Expr::BinaryOp {
                 left: Box::new(Expr::Column("age".to_string())),
                 op: BinaryOperator::Gt,
                 right: Box::new(Expr::Literal(Value::Integer(18))),
             }),
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
+            with: vec![],
         };
 
         let cols = PushdownAnalyzer::extract_needed_columns(&statement);
