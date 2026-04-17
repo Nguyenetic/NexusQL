@@ -1,8 +1,9 @@
 //! Backwards-compatibility shim.
 //!
-//! Before the variant refactor this file held the BSC struct as
-//! `Hypervector`. The struct now lives in `variants::bsc::BscVec`;
-//! the rest of the crate imports `Hypervector` from this module or
-//! from the parent `engine::hdc` module (both paths work).
+//! Before the enum refactor `Hypervector` was a struct living in this
+//! file. It is now the enum in the parent `hdc` module. This shim
+//! re-exports it so `use crate::engine::hdc::hypervector::Hypervector;`
+//! keeps compiling. New code should use `crate::engine::hdc::Hypervector`.
 
-pub use crate::engine::hdc::variants::bsc::BscVec as Hypervector;
+pub use crate::engine::hdc::Hypervector;
+pub use crate::engine::hdc::variants::bsc::BscVec;
