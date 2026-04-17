@@ -1,0 +1,22 @@
+[package]
+name = "nexusql-python"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Python bindings for NexusQL via PyO3"
+repository = "https://github.com/Nguyenetic/NexusQL"
+
+[lib]
+# Must match tool.maturin.module-name in pyproject.toml: nexusql._nexusql
+# When module-name is a dotted path, maturin uses the last segment as the
+# extension filename.
+name = "_nexusql"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Path-depend on the workspace crate so the binding always tracks the current
+# NexusQL source. When publishing to PyPI via maturin, switch to a git/version
+# pin of the main crate.
+nexusql = { path = "../.." }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
