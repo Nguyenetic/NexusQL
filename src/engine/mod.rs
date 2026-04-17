@@ -62,6 +62,23 @@ pub trait StorageEngine: Send + Sync {
     async fn flush(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Direct bulk insert bypassing SQL parse. `None` means engine doesn't
+    /// support direct inserts (fall back to SQL path).
+    async fn bulk_insert(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _rows: Vec<Vec<crate::types::Value>>,
+    ) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
+    /// Schema lookup used by fast-path INSERT to resolve implicit column lists.
+    /// Returns `Ok(None)` if the table is unknown to this engine.
+    async fn table_columns(&self, _table: &str) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
 }
 pub mod batch;
 pub use batch::BatchInsert;

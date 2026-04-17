@@ -57,6 +57,17 @@ pub struct QueryParser {
     dialect: NexusQLDialect,
 }
 
+/// Render a sqlparser `ObjectName` to a bare dotted string, dropping any
+/// quote-style ident adornments. `CREATE TABLE "My Name"` -> `My Name`,
+/// `schema.tbl` -> `schema.tbl`.
+fn object_name_bare(name: &sql_ast::ObjectName) -> String {
+    name.0
+        .iter()
+        .map(|ident| ident.value.clone())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 impl QueryParser {
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -799,7 +810,11 @@ impl QueryParser {
             sql_ast::Statement::Insert(insert) => self.convert_insert(insert),
 
             sql_ast::Statement::CreateTable(create) => Ok(Statement::CreateTable {
-                name: create.name.to_string(),
+                // `ObjectName::to_string()` preserves quoting (e.g. "How to use"
+                // stays quoted). We store table names bare so that INSERT /
+                // SELECT / DROP with either quoted or unquoted refs resolve to
+                // the same entry.
+                name: object_name_bare(&create.name),
                 columns: create
                     .columns
                     .iter()
@@ -840,7 +855,7 @@ impl QueryParser {
                     .as_ref()
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "unnamed_index".to_string());
-                let table = create_index.table_name.to_string();
+                let table = object_name_bare(&create_index.table_name);
 
                 // Extract column names from OrderByExpr
                 let column_names: Vec<String> = create_index
@@ -961,7 +976,11 @@ impl QueryParser {
                 selection,
                 ..
             } => {
-                let table_name = table.to_string();
+                let table_name = if let sql_ast::TableFactor::Table { name, .. } = &table.relation {
+                    object_name_bare(name)
+                } else {
+                    table.to_string()
+                };
 
                 // Convert SET assignments
                 let mut set_map = Vec::new();
@@ -1005,7 +1024,7 @@ impl QueryParser {
                             if let sql_ast::TableFactor::Table { name, .. } =
                                 &table_with_joins.relation
                             {
-                                name.to_string()
+                                object_name_bare(name)
                             } else {
                                 return Err(NexusError::ParseError(
                                     "Unsupported DELETE FROM structure".into(),
@@ -1620,7 +1639,7 @@ impl QueryParser {
     ) -> Result<TableRef> {
         match &table_with_joins.relation {
             sql_ast::TableFactor::Table { name, alias, .. } => Ok(TableRef::Table {
-                name: name.to_string(),
+                name: object_name_bare(name),
                 alias: alias.as_ref().map(|a| a.name.value.clone()),
             }),
             sql_ast::TableFactor::Derived {
@@ -1787,7 +1806,7 @@ impl QueryParser {
     }
 
     fn convert_insert(&self, insert: &sql_ast::Insert) -> Result<Statement> {
-        let table = insert.table_name.to_string();
+        let table = object_name_bare(&insert.table_name);
 
         // Extract column names
         let columns = if !insert.columns.is_empty() {

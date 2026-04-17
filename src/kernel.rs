@@ -121,4 +121,45 @@ impl NexusKernel {
         }
         Ok(())
     }
+
+    /// Look up the declared columns for a table on the default engine.
+    /// Used by fast-path INSERT parsing to resolve implicit column lists.
+    pub async fn table_columns(&self, table: &str) -> Result<Option<Vec<String>>> {
+        let engine = self
+            .engines
+            .get("default")
+            .ok_or_else(|| NexusError::EngineNotFound("default".into()))?;
+        engine.value().table_columns(table).await
+    }
+
+    /// Direct bulk insert bypassing SQL parse. Routes to the default engine
+    /// (the only one that currently implements the fast path).
+    pub async fn bulk_insert(
+        &self,
+        table: &str,
+        columns: &[String],
+        rows: Vec<crate::types::Value>,
+        row_count: usize,
+    ) -> Result<usize> {
+        let engine = self
+            .engines
+            .get("default")
+            .ok_or_else(|| NexusError::EngineNotFound("default".into()))?;
+        let ncols = columns.len();
+        let mut row_vecs: Vec<Vec<crate::types::Value>> = Vec::with_capacity(row_count);
+        let mut it = rows.into_iter();
+        for _ in 0..row_count {
+            let mut row = Vec::with_capacity(ncols);
+            for _ in 0..ncols {
+                row.push(it.next().unwrap_or(crate::types::Value::Null));
+            }
+            row_vecs.push(row);
+        }
+        match engine.bulk_insert(table, columns, row_vecs).await? {
+            Some(n) => Ok(n),
+            None => Err(NexusError::QueryError(
+                "default engine does not support bulk_insert".into(),
+            )),
+        }
+    }
 }

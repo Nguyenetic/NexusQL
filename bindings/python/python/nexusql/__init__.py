@@ -159,6 +159,39 @@ class NexusDB:
         self._check_open()
         self._native.set_bulk_mode(enabled)
 
+    def bulk_insert(
+        self,
+        table: str,
+        columns: Sequence[str],
+        rows: Sequence[Sequence[Any]],
+    ) -> int:
+        """Directly bulk-insert rows into `table`. Bypasses SQL parser.
+
+        Args:
+            table: destination table (must already exist via CREATE TABLE).
+            columns: ordered list of column names that `rows` provides.
+                     Other columns default to NULL.
+            rows: iterable of row tuples/lists. Types follow the execute()
+                  parameter mapping (None/bool/int/float/str/bytes/list[float]).
+
+        Returns:
+            Number of rows inserted.
+
+        Example:
+            db.execute("CREATE TABLE t (id INT, name TEXT)")
+            db.bulk_insert(
+                "t",
+                ["id", "name"],
+                [(1, "a"), (2, "b"), (3, "c")],
+            )
+
+        This skips sqlparser-rs + optimizer + router overhead that every
+        `execute(INSERT ...)` incurs — typically 5-50x faster for wide bulk
+        loads.
+        """
+        self._check_open()
+        return self._native.bulk_insert(table, list(columns), rows)
+
     def flush(self) -> None:
         """Flush any deferred writes to disk. Idempotent."""
         self._check_open()

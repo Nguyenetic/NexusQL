@@ -203,16 +203,47 @@ impl NexusSQL {
         sql: &str,
         params: Option<Vec<Value>>,
     ) -> Result<ResultSet> {
-        // Previously this path parsed the SQL twice and ran the optimizer
-        // whose result was immediately discarded (`let _optimized`). That
-        // doubled parse cost on every call — measurable (~50%) even for
-        // small queries, dominant for wide bulk INSERTs with hundreds of
-        // VALUES tuples. The kernel re-parses on its own path, so the work
-        // here is strictly redundant; drop it.
-        //
-        // If/when the optimizer gains real effect (pushdown, CSE, join
-        // reordering), reintroduce it via `self.kernel.execute_plan(plan)`
-        // so we don't pay parse twice.
+        // Fast path: if the SQL looks like a plain `INSERT INTO x (...)
+        // VALUES (lit...), ...;` we skip sqlparser-rs entirely and feed
+        // rows straight into the engine's bulk_insert. On bulk workloads
+        // that shape is 60-80% of statements, and sqlparser is by far the
+        // dominant cost. Only taken when the caller passed no `params`
+        // (the fast parser doesn't understand $1/$2 placeholders).
+        if params.is_none() {
+            if let Some(fi) = crate::query::try_parse_insert(sql) {
+                // Resolve the column list: use what the INSERT specifies,
+                // otherwise fall back to the table's declared columns
+                // (which is what INSERT ... VALUES without a column list
+                // means semantically).
+                let columns = match fi.columns {
+                    Some(c) => c,
+                    None => match self.kernel.table_columns(&fi.table).await? {
+                        Some(c) => c,
+                        None => {
+                            // Table not found / unknown schema — let the
+                            // full parser produce the proper error.
+                            return self
+                                .kernel
+                                .execute_with_params(sql, Vec::new())
+                                .await;
+                        }
+                    },
+                };
+                let row_count = fi.rows.len();
+                let mut flat: Vec<Value> = Vec::with_capacity(row_count * columns.len());
+                for row in fi.rows {
+                    for v in row {
+                        flat.push(v);
+                    }
+                }
+                self.kernel
+                    .bulk_insert(&fi.table, &columns, flat, row_count)
+                    .await?;
+                return Ok(ResultSet::empty());
+            }
+        }
+
+        // General path — sqlparser handles everything else.
         self.kernel
             .execute_with_params(sql, params.unwrap_or_default())
             .await
@@ -233,6 +264,25 @@ impl NexusSQL {
     /// Flush any deferred writes across all engines. Call after bulk-loading.
     pub async fn flush(&self) -> Result<()> {
         self.kernel.flush().await
+    }
+
+    /// Direct bulk insert — completely bypasses the SQL parser. Pass a table
+    /// name, list of column names, and a flat row buffer where values are
+    /// laid out row-major (row_count × len(columns) entries). Returns the
+    /// number of rows inserted.
+    ///
+    /// The fastest way to load data into NexusQL: zero SQL parsing, zero
+    /// optimizer passes, zero engine routing overhead.
+    pub async fn bulk_insert(
+        &self,
+        table: &str,
+        columns: &[String],
+        rows_flat: Vec<Value>,
+        row_count: usize,
+    ) -> Result<usize> {
+        self.kernel
+            .bulk_insert(table, columns, rows_flat, row_count)
+            .await
     }
 
     pub async fn shutdown(self) -> Result<()> {

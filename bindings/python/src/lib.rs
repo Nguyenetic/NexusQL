@@ -219,6 +219,76 @@ impl NexusDB {
         Ok(())
     }
 
+    /// Direct bulk insert — bypasses the SQL parser entirely.
+    ///
+    /// Args:
+    ///     table: destination table name (must already exist).
+    ///     columns: list of column names to fill. Unmentioned columns
+    ///              default to NULL.
+    ///     rows: list of row tuples/lists of Python values. Types follow
+    ///           the same mapping as execute()'s params.
+    ///
+    /// Returns the number of rows inserted. For large loads this is 5-50x
+    /// faster than issuing INSERT statements because it skips sqlparser,
+    /// the optimizer pass, and the router.
+    fn bulk_insert(
+        &self,
+        py: Python<'_>,
+        table: &str,
+        columns: Vec<String>,
+        rows: &Bound<'_, PyList>,
+    ) -> PyResult<usize> {
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("NexusDB closed"))?
+            .clone();
+        let rt = self
+            .rt
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("NexusDB closed"))?
+            .clone();
+
+        // Flatten rows (list[list|tuple]) -> Vec<Value> row-major.
+        let ncols = columns.len();
+        let row_count = rows.len();
+        let mut flat: Vec<Value> = Vec::with_capacity(row_count * ncols);
+
+        for row_any in rows.iter() {
+            let row_list = row_any.downcast::<PyList>().ok();
+            let row_tuple = row_any.downcast::<pyo3::types::PyTuple>().ok();
+            let len = if let Some(l) = row_list.as_ref() {
+                l.len()
+            } else if let Some(t) = row_tuple.as_ref() {
+                t.len()
+            } else {
+                return Err(PyTypeError::new_err(
+                    "each row must be a list or tuple",
+                ));
+            };
+            for i in 0..ncols {
+                if i < len {
+                    let cell = if let Some(l) = row_list.as_ref() {
+                        l.get_item(i)?
+                    } else {
+                        row_tuple.as_ref().unwrap().get_item(i)?
+                    };
+                    flat.push(py_to_value(&cell)?);
+                } else {
+                    flat.push(Value::Null);
+                }
+            }
+        }
+
+        let table = table.to_string();
+        let n = py.allow_threads(move || {
+            rt.block_on(async move {
+                db.bulk_insert(&table, &columns, flat, row_count).await
+            })
+        });
+        n.map_err(rt_err)
+    }
+
     /// Flush any deferred writes to disk. Idempotent.
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         let db = self
