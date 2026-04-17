@@ -39,3 +39,5 @@ Repository = "https://github.com/johnhnguyen97/NexusQL"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+module-name = "nexusql._nexusql"
+python-source = "python"

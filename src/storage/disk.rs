@@ -91,6 +91,18 @@ impl DiskStorage {
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
             db.insert(key.as_bytes(), value)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            // NOTE: sled auto-flushes on drop and buffers writes efficiently.
+            // The explicit per-save flush was forcing an fsync on every call,
+            // which dominated bulk-load flush time. Callers that need strict
+            // durability should invoke `sync()` explicitly.
+        }
+        Ok(())
+    }
+
+    /// Force all pending sled writes to disk. Call once at end of a bulk
+    /// load instead of fsyncing after every table.
+    pub fn sync(&self) -> Result<()> {
+        if let Some(ref db) = self.db {
             db.flush()
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         }

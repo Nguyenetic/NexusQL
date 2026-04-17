@@ -57,6 +57,17 @@ pub struct QueryParser {
     dialect: NexusQLDialect,
 }
 
+/// Render a sqlparser `ObjectName` to a bare dotted string, dropping any
+/// quote-style ident adornments. `CREATE TABLE "My Name"` -> `My Name`,
+/// `schema.tbl` -> `schema.tbl`.
+fn object_name_bare(name: &sql_ast::ObjectName) -> String {
+    name.0
+        .iter()
+        .map(|ident| ident.value.clone())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 impl QueryParser {
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -799,7 +810,11 @@ impl QueryParser {
             sql_ast::Statement::Insert(insert) => self.convert_insert(insert),
 
             sql_ast::Statement::CreateTable(create) => Ok(Statement::CreateTable {
-                name: create.name.to_string(),
+                // `ObjectName::to_string()` preserves quoting (e.g. "How to use"
+                // stays quoted). We store table names bare so that INSERT /
+                // SELECT / DROP with either quoted or unquoted refs resolve to
+                // the same entry.
+                name: object_name_bare(&create.name),
                 columns: create
                     .columns
                     .iter()
@@ -840,7 +855,7 @@ impl QueryParser {
                     .as_ref()
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "unnamed_index".to_string());
-                let table = create_index.table_name.to_string();
+                let table = object_name_bare(&create_index.table_name);
 
                 // Extract column names from OrderByExpr
                 let column_names: Vec<String> = create_index
@@ -961,7 +976,11 @@ impl QueryParser {
                 selection,
                 ..
             } => {
-                let table_name = table.to_string();
+                let table_name = if let sql_ast::TableFactor::Table { name, .. } = &table.relation {
+                    object_name_bare(name)
+                } else {
+                    table.to_string()
+                };
 
                 // Convert SET assignments
                 let mut set_map = Vec::new();
@@ -1005,7 +1024,7 @@ impl QueryParser {
                             if let sql_ast::TableFactor::Table { name, .. } =
                                 &table_with_joins.relation
                             {
-                                name.to_string()
+                                object_name_bare(name)
                             } else {
                                 return Err(NexusError::ParseError(
                                     "Unsupported DELETE FROM structure".into(),
@@ -1458,6 +1477,43 @@ impl QueryParser {
                 })
             }
 
+            // Unary +/-/NOT. sqlparser emits negative numeric literals as
+            // UnaryOp(Minus, Number(...)); without this branch every INSERT
+            // with a negative value fails to parse. Fold `-<literal>` into a
+            // negated Literal; unary `+` is a no-op; `NOT x` becomes `x = false`.
+            sql_ast::Expr::UnaryOp { op, expr: inner } => {
+                use sql_ast::UnaryOperator as UOP;
+                match op {
+                    UOP::Plus => self.convert_expr_to_ast(inner),
+                    UOP::Minus => {
+                        let inner_ast = self.convert_expr_to_ast(inner)?;
+                        match inner_ast {
+                            Expr::Literal(Value::Integer(n)) => {
+                                Ok(Expr::Literal(Value::Integer(-n)))
+                            }
+                            Expr::Literal(Value::Float(f)) => {
+                                Ok(Expr::Literal(Value::Float(-f)))
+                            }
+                            _ => Err(NexusError::ParseError(
+                                "Unary minus only supported on numeric literals".to_string(),
+                            )),
+                        }
+                    }
+                    UOP::Not => {
+                        let inner_ast = self.convert_expr_to_ast(inner)?;
+                        Ok(Expr::BinaryOp {
+                            left: Box::new(inner_ast),
+                            op: BinaryOperator::Eq,
+                            right: Box::new(Expr::Literal(Value::Boolean(false))),
+                        })
+                    }
+                    _ => Err(NexusError::ParseError(format!(
+                        "Unsupported unary operator: {:?}",
+                        op
+                    ))),
+                }
+            }
+
             _ => Err(NexusError::ParseError(format!(
                 "Unsupported expression in SELECT: {:?}",
                 expr
@@ -1583,7 +1639,7 @@ impl QueryParser {
     ) -> Result<TableRef> {
         match &table_with_joins.relation {
             sql_ast::TableFactor::Table { name, alias, .. } => Ok(TableRef::Table {
-                name: name.to_string(),
+                name: object_name_bare(name),
                 alias: alias.as_ref().map(|a| a.name.value.clone()),
             }),
             sql_ast::TableFactor::Derived {
@@ -1750,7 +1806,7 @@ impl QueryParser {
     }
 
     fn convert_insert(&self, insert: &sql_ast::Insert) -> Result<Statement> {
-        let table = insert.table_name.to_string();
+        let table = object_name_bare(&insert.table_name);
 
         // Extract column names
         let columns = if !insert.columns.is_empty() {
@@ -1847,24 +1903,40 @@ impl QueryParser {
         }
     }
 
-    /// Parse vector literal from string like '[0.1, 0.2, 0.3]'
+    /// Parse vector literal from string like '[0.1, 0.2, 0.3]'.
+    ///
+    /// Only recognises all-numeric, comma-separated elements so that JSON
+    /// arrays (e.g. `[{"index": 1}]`) or other bracketed text fall through
+    /// to plain-text storage rather than erroring.
     fn parse_vector_literal(&self, s: &str) -> Result<Value> {
-        let trimmed = s.trim_start_matches('[').trim_end_matches(']');
-        let mut vector = Vec::new();
+        if let Some(v) = self.try_parse_vector_literal(s) {
+            Ok(Value::Vector(v))
+        } else {
+            // Not actually a numeric vector — preserve the original text
+            // rather than erroring. Common case: JSON blobs or display
+            // strings that happen to use `[...]`.
+            Ok(Value::Text(s.to_string()))
+        }
+    }
 
-        for part in trimmed.split(',') {
+    fn try_parse_vector_literal(&self, s: &str) -> Option<Vec<f32>> {
+        let trimmed = s.trim();
+        if !(trimmed.starts_with('[') && trimmed.ends_with(']')) {
+            return None;
+        }
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if inner.trim().is_empty() {
+            return None; // empty brackets — treat as text, not empty vector
+        }
+        let mut vector = Vec::new();
+        for part in inner.split(',') {
             let part = part.trim();
-            if let Ok(f) = part.parse::<f32>() {
-                vector.push(f);
-            } else {
-                return Err(NexusError::ParseError(format!(
-                    "Invalid vector element: {}",
-                    part
-                )));
+            match part.parse::<f32>() {
+                Ok(f) => vector.push(f),
+                Err(_) => return None,
             }
         }
-
-        Ok(Value::Vector(vector))
+        Some(vector)
     }
 
     fn extract_from_clause(&self, from: &Vec<sql_ast::TableWithJoins>) -> Result<FromClause> {

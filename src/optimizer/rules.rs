@@ -19,22 +19,30 @@ impl OptimizationRule for ConstantFoldingRule {
     fn apply(&self, statement: Statement) -> Result<Statement> {
         match statement {
             Statement::Select {
+                with,
                 columns,
                 from,
                 where_clause,
+                group_by,
+                having,
                 using_engine,
                 order_by,
                 limit,
+                fetch,
             } => {
                 let optimized_where = where_clause.map(|expr| self.fold_constants(expr));
 
                 Ok(Statement::Select {
+                    with,
                     columns,
                     from,
                     where_clause: optimized_where,
+                    group_by,
+                    having,
                     using_engine,
                     order_by,
                     limit,
+                    fetch,
                 })
             }
             _ => Ok(statement),
@@ -118,22 +126,30 @@ impl OptimizationRule for ExpressionSimplificationRule {
     fn apply(&self, statement: Statement) -> Result<Statement> {
         match statement {
             Statement::Select {
+                with,
                 columns,
                 from,
                 where_clause,
+                group_by,
+                having,
                 using_engine,
                 order_by,
                 limit,
+                fetch,
             } => {
                 let simplified_where = where_clause.map(|expr| self.simplify(expr));
 
                 Ok(Statement::Select {
+                    with,
                     columns,
                     from,
                     where_clause: simplified_where,
+                    group_by,
+                    having,
                     using_engine,
                     order_by,
                     limit,
+                    fetch,
                 })
             }
             _ => Ok(statement),

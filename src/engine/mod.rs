@@ -51,6 +51,34 @@ pub trait StorageEngine: Send + Sync {
     async fn shutdown(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Enable/disable bulk-load mode: when ON, DDL/DML statements skip the
+    /// per-statement disk persistence (huge O(N^2) savings on wide bulk
+    /// INSERTs). Tables touched while bulk mode is on must be made durable
+    /// by a subsequent `flush()` call. Default impl: no-op.
+    fn set_bulk_mode(&self, _enabled: bool) {}
+
+    /// Force any deferred writes to disk. No-op for engines that don't buffer.
+    async fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Direct bulk insert bypassing SQL parse. `None` means engine doesn't
+    /// support direct inserts (fall back to SQL path).
+    async fn bulk_insert(
+        &self,
+        _table: &str,
+        _columns: &[String],
+        _rows: Vec<Vec<crate::types::Value>>,
+    ) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
+    /// Schema lookup used by fast-path INSERT to resolve implicit column lists.
+    /// Returns `Ok(None)` if the table is unknown to this engine.
+    async fn table_columns(&self, _table: &str) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
 }
 pub mod batch;
 pub use batch::BatchInsert;
