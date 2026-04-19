@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod autoincrement_tests {
     use crate::engine::executor::Executor;
-    use crate::query::ast::{ColumnDef, DataType, Expr, SelectItem, Statement};
+    use crate::query::ast::{ColumnDef, DataType, Expr, FromClause, SelectItem, Statement};
     use crate::query::evaluator::QueryParams;
     use crate::types::Value;
     use std::collections::HashMap;
@@ -59,12 +59,16 @@ mod autoincrement_tests {
 
         // Query all rows
         let select = Statement::Select {
+            with: vec![],
             columns: vec![SelectItem::Wildcard],
-            from: "users".to_string(),
+            from: FromClause { table: "users".to_string(), alias: None, joins: vec![] },
             where_clause: None,
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
         };
         let result = executor.execute(&select, &params).unwrap();
 
@@ -125,12 +129,16 @@ mod autoincrement_tests {
 
         // Query
         let select = Statement::Select {
+            with: vec![],
             columns: vec![SelectItem::Wildcard],
-            from: "items".to_string(),
+            from: FromClause { table: "items".to_string(), alias: None, joins: vec![] },
             where_clause: None,
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
         };
         let result = executor.execute(&select, &params).unwrap();
 
@@ -180,12 +188,16 @@ mod autoincrement_tests {
 
         // Query
         let select = Statement::Select {
+            with: vec![],
             columns: vec![SelectItem::Wildcard],
-            from: "test".to_string(),
+            from: FromClause { table: "test".to_string(), alias: None, joins: vec![] },
             where_clause: None,
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
         };
         let result = executor.execute(&select, &params).unwrap();
 
@@ -233,12 +245,16 @@ mod autoincrement_tests {
 
         // Query
         let select = Statement::Select {
+            with: vec![],
             columns: vec![SelectItem::Wildcard],
-            from: "counter".to_string(),
+            from: FromClause { table: "counter".to_string(), alias: None, joins: vec![] },
             where_clause: None,
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
         };
         let result = executor.execute(&select, &params).unwrap();
 
@@ -290,12 +306,16 @@ mod autoincrement_tests {
 
         // Query
         let select = Statement::Select {
+            with: vec![],
             columns: vec![SelectItem::Wildcard],
-            from: "manual".to_string(),
+            from: FromClause { table: "manual".to_string(), alias: None, joins: vec![] },
             where_clause: None,
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
         };
         let result = executor.execute(&select, &params).unwrap();
 
@@ -350,12 +370,16 @@ mod autoincrement_tests {
 
         // Query
         let select = Statement::Select {
+            with: vec![],
             columns: vec![SelectItem::Wildcard],
-            from: "reorder".to_string(),
+            from: FromClause { table: "reorder".to_string(), alias: None, joins: vec![] },
             where_clause: None,
+            group_by: vec![],
+            having: None,
             using_engine: None,
             order_by: None,
             limit: None,
+            fetch: vec![],
         };
         let result = executor.execute(&select, &params).unwrap();
 
