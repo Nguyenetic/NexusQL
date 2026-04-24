@@ -40,6 +40,7 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 - 🔒 **Secure Applications** - RBAC, RLS, and parameterized queries
 - ⚡ **High-Performance Apps** - 1578× index speedup, 49× cache speedup
 - 🌐 **Multi-Tenant Systems** - Row-level security and partitioning
+- 📱 **Mobile Apps** - Native Android support via JNI bindings (core engine, no ML deps)
 
 ---
 
@@ -141,8 +142,43 @@ pip install nexusql
 
 ```toml
 [dependencies]
+# Full-featured (default): includes HDC, ColBERT, HNSW vector search (pulls in ort + tokenizers)
 nexusql = { git = "https://github.com/Nguyenetic/NexusQL.git" }
+
+# Core only (no ML deps): LSM storage + SQL + ACID transactions, no vector search.
+# Required for mobile / constrained targets where `ort` and `tokenizers` can't build.
+nexusql = { git = "https://github.com/Nguyenetic/NexusQL.git", default-features = false }
 ```
+
+### Android (Native via JNI)
+
+NexusQL runs natively on Android via the `bindings/android/` crate. The full NexusQL engine (sled LSM tree + NexusKernel + SQL executor) compiles for `aarch64-linux-android` when the `vector-search` feature is disabled. HDC / ColBERT / HNSW vector features remain on desktop only until their upstream deps (`ort`, `tokenizers`) gain Android NDK support.
+
+```bash
+# Install cargo-ndk
+cargo install cargo-ndk
+rustup target add aarch64-linux-android
+
+# Set Android NDK path
+export ANDROID_NDK_HOME=/path/to/ndk/26.1.10909125
+
+# Cross-compile
+cd bindings/android
+cargo ndk -t arm64-v8a build --release
+# Output: target/aarch64-linux-android/release/libnexusql_android.so
+```
+
+**Kotlin API** (from the Android library module in consumer apps):
+
+```kotlin
+val db = NexusQL.open(context.filesDir.resolve("app.nxql").absolutePath)
+db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+db.execute("INSERT INTO kv VALUES ('hello', 'world')")
+val rows = db.query("SELECT v FROM kv WHERE k = 'hello'")
+db.close()
+```
+
+See `bindings/android/README.md` for full setup, consumer module gradle config, and packaging the `.so` into an Android app.
 
 ### Build from Source
 
