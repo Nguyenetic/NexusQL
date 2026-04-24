@@ -1,29 +1,29 @@
-// NexusQL Android JNI bindings
+// NexusQL Android JNI bindings — real NexusQL engine
 //
-// Exposes a SQLite-backed database with the same API surface as NexusQL:
+// Uses NexusQL's DefaultEngine (sled-backed LSM storage) without the
+// optional `vector-search` feature (ort + tokenizers), so it cross-compiles
+// cleanly for all Android ABIs via cargo-ndk.
+//
+// API surface (matches the Kotlin wrapper):
 //   NexusQL.open(path) -> handle
 //   NexusQL.execute(handle, sql)
 //   NexusQL.query(handle, sql) -> List<List<String>>
 //   NexusQL.close(handle)
-//
-// Rationale for SQLite backend: NexusQL's main crate depends on `ort` (ONNX
-// Runtime) and `tokenizers`, which cannot be cross-compiled for Android NDK
-// in the current toolchain setup. This binding crate uses `rusqlite` (bundled
-// SQLite) which compiles cleanly for all Android ABIs via cargo-ndk, and
-// exposes the identical public API so the Kotlin caller is unchanged when the
-// real NexusQL engine becomes Android-compatible.
 
 use jni::objects::{JClass, JString};
 use jni::sys::{jlong, jobject};
 use jni::JNIEnv;
-use rusqlite::Connection;
+use nexusql::engine::default::DefaultEngine;
+use nexusql::kernel::NexusKernel;
 use std::sync::Mutex;
+use tokio::runtime::Runtime;
 
 struct DbHandle {
-    conn: Mutex<Connection>,
+    kernel: Mutex<NexusKernel>,
+    rt: Runtime,
 }
 
-// Safety: DbHandle is only accessed through the Mutex, making it Send+Sync.
+// Safety: kernel is only accessed through the Mutex.
 unsafe impl Send for DbHandle {}
 unsafe impl Sync for DbHandle {}
 
@@ -41,16 +41,30 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeOpen(
         }
     };
 
-    let conn = match Connection::open(&path_str) {
-        Ok(c) => c,
+    let rt = match Runtime::new() {
+        Ok(r) => r,
         Err(e) => {
-            let _ = env.throw_new("java/lang/RuntimeException", format!("open failed: {e}"));
+            let _ = env.throw_new("java/lang/RuntimeException", format!("tokio runtime: {e}"));
+            return 0;
+        }
+    };
+
+    let kernel = match rt.block_on(async {
+        let k = NexusKernel::new(&path_str, false).await?;
+        let engine = DefaultEngine::new(&path_str, false)?;
+        k.register_engine(Box::new(engine)).await?;
+        Ok::<NexusKernel, nexusql::NexusError>(k)
+    }) {
+        Ok(k) => k,
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", format!("NexusQL open failed: {e}"));
             return 0;
         }
     };
 
     let handle = Box::new(DbHandle {
-        conn: Mutex::new(conn),
+        kernel: Mutex::new(kernel),
+        rt,
     });
     Box::into_raw(handle) as jlong
 }
@@ -75,8 +89,8 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeExecute(
         }
     };
 
-    let conn = db.conn.lock().unwrap();
-    if let Err(e) = conn.execute_batch(&sql_str) {
+    let kernel = db.kernel.lock().unwrap();
+    if let Err(e) = db.rt.block_on(kernel.execute(&sql_str)) {
         let _ = env.throw_new("java/lang/RuntimeException", format!("execute failed: {e}"));
     }
 }
@@ -102,7 +116,15 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeQuery(
         }
     };
 
-    let conn = db.conn.lock().unwrap();
+    let kernel = db.kernel.lock().unwrap();
+    let result_set = match db.rt.block_on(kernel.execute(&sql_str)) {
+        Ok(rs) => rs,
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", format!("query failed: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+
     let outer_list = match env.new_object("java/util/ArrayList", "()V", &[]) {
         Ok(o) => o,
         Err(_) => return std::ptr::null_mut(),
@@ -112,33 +134,7 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeQuery(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let mut stmt = match conn.prepare(&sql_str) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = env.throw_new("java/lang/RuntimeException", format!("prepare failed: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-
-    let col_count = stmt.column_count();
-    let mut rows = match stmt.query([]) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = env.throw_new("java/lang/RuntimeException", format!("query failed: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-
-    loop {
-        let row = match rows.next() {
-            Ok(Some(r)) => r,
-            Ok(None) => break,
-            Err(e) => {
-                let _ = env.throw_new("java/lang/RuntimeException", format!("row error: {e}"));
-                return std::ptr::null_mut();
-            }
-        };
-
+    for row in &result_set.rows {
         let inner_list_obj = match env.new_object("java/util/ArrayList", "()V", &[]) {
             Ok(o) => o,
             Err(_) => return std::ptr::null_mut(),
@@ -148,13 +144,10 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeQuery(
             Err(_) => return std::ptr::null_mut(),
         };
 
-        for col in 0..col_count {
-            let val = match row.get_ref(col) {
-                Ok(v) => value_to_string(v),
-                Err(_) => "NULL".to_string(),
-            };
-            let jval = match env.new_string(&val) {
-                Ok(s) => s,
+        for value in &row.values {
+            let s = value_to_string(value);
+            let jval = match env.new_string(&s) {
+                Ok(v) => v,
                 Err(_) => return std::ptr::null_mut(),
             };
             if inner.add(&mut env, &jval).is_err() {
@@ -170,6 +163,19 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeQuery(
     outer_list.into_raw()
 }
 
+fn value_to_string(val: &nexusql::types::Value) -> String {
+    use nexusql::types::Value;
+    match val {
+        Value::Null => "NULL".to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.into_inner().to_string(),
+        Value::Text(t) => t.clone(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Blob(b) => format!("<blob {} bytes>", b.len()),
+        Value::Vector(v) => format!("<vector dim={}>", v.len()),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeClose(
     _env: JNIEnv,
@@ -177,18 +183,8 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeClose(
     handle: jlong,
 ) {
     if handle != 0 {
-        // Reconstruct the Box and drop it, closing the connection.
-        let _ = unsafe { Box::from_raw(handle as *mut DbHandle) };
-    }
-}
-
-fn value_to_string(val: rusqlite::types::ValueRef<'_>) -> String {
-    use rusqlite::types::ValueRef;
-    match val {
-        ValueRef::Null => "NULL".to_string(),
-        ValueRef::Integer(i) => i.to_string(),
-        ValueRef::Real(f) => f.to_string(),
-        ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
-        ValueRef::Blob(b) => format!("<blob {} bytes>", b.len()),
+        let db = unsafe { Box::from_raw(handle as *mut DbHandle) };
+        let kernel = db.kernel.into_inner().unwrap();
+        db.rt.block_on(kernel.shutdown()).ok();
     }
 }

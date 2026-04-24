@@ -26,11 +26,15 @@ ndarray = "0.16"
 sqlparser = "0.52"
 rand = "0.8"
 regex = "1"
-ort = "2.0.0-rc.10"
-tokenizers = "0.20"
+ort = { version = "2.0.0-rc.10", optional = true }
+tokenizers = { version = "0.20", optional = true }
 num_cpus = "1.16"
 bcrypt = "0.15"
 ordered-float = "4.2"
+
+[features]
+default = ["vector-search"]
+vector-search = ["dep:ort", "dep:tokenizers"]
 
 [dev-dependencies]
 tokio-test = "0.4"
