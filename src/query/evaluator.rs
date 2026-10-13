@@ -371,6 +371,14 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams)
         return crate::geometry::evaluate(&name_upper, &values);
     }
 
+    if name_upper.starts_with("HDC_") {
+        let values: Vec<_> = args
+            .iter()
+            .map(|arg| evaluate_expr(row, arg, params))
+            .collect();
+        return crate::engine::hdc::classifier::evaluate(&name_upper, &values);
+    }
+
     match name_upper.as_str() {
         "COLBERT_SCORE" if matches!(args.len(), 2 | 3) => {
             if args.len() == 3

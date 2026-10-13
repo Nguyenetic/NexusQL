@@ -29,6 +29,8 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 
 - **Hyperdimensional Computing (HDC)** - One-shot learning with 100× energy efficiency
 - **ColBERT Late Interaction** - Token-level semantic search (100× faster than BERT)
+- **Small-corpus SQL** - Model-free short-name ranking and persistent one-shot
+  classifiers ([usage](docs/guides/small-corpus-ai.md))
 - **HNSW Vector Index** - Logarithmic search with 99%+ recall
 - **Full ACID Compliance** - MVCC transactions with crash recovery
 - **Parameterized Queries** - Built-in SQL injection prevention
