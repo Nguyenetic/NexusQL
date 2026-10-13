@@ -372,6 +372,25 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams)
     }
 
     match name_upper.as_str() {
+        "COLBERT_SCORE" if matches!(args.len(), 2 | 3) => {
+            if args.len() == 3
+                && !evaluate_expr(row, &args[2], params)
+                    .as_str()
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case("lightweight"))
+            {
+                return Value::Null;
+            }
+            let query = evaluate_expr(row, &args[0], params);
+            let candidate = evaluate_expr(row, &args[1], params);
+            match (query.as_str(), candidate.as_str()) {
+                (Some(query), Some(candidate)) => {
+                    crate::engine::colbert::lightweight::score(query, candidate)
+                        .map(Value::from)
+                        .unwrap_or(Value::Null)
+                }
+                _ => Value::Null,
+            }
+        }
         // Vector distance functions (pgvector-compatible)
         "VECTOR_DISTANCE" | "L2_DISTANCE" => {
             if args.len() != 2 {

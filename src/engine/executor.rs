@@ -755,21 +755,15 @@ impl Executor {
                     } else {
                         &order.expr
                     };
-                    rows.sort_by(|a, b| {
-                        use crate::query::evaluator::evaluate_expr;
-                        let a_val = evaluate_expr(a, order_expr, params);
-                        let b_val = evaluate_expr(b, order_expr, params);
-
-                        let cmp = a_val
-                            .partial_cmp(&b_val)
-                            .unwrap_or(std::cmp::Ordering::Equal);
-
-                        if order.ascending {
-                            cmp
-                        } else {
-                            cmp.reverse()
-                        }
-                    });
+                    // Expensive scalar scores/distances need evaluation once
+                    // per row, not once per comparison during sorting.
+                    if order.ascending {
+                        rows.sort_by_cached_key(|row| evaluate_expr(row, order_expr, params));
+                    } else {
+                        rows.sort_by_cached_key(|row| {
+                            std::cmp::Reverse(evaluate_expr(row, order_expr, params))
+                        });
+                    }
                 }
 
                 // Apply LIMIT

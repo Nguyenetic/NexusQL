@@ -2,6 +2,7 @@
 //! PROPRIETARY - Part of Multi-Modal Intelligence
 
 pub mod embeddings;
+pub mod lightweight;
 pub mod maxsim;
 
 use self::embeddings::EmbeddingGenerator;
