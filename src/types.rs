@@ -313,6 +313,15 @@ impl Row {
         self.columns
             .iter()
             .position(|c| c == column)
+            .or_else(|| {
+                if column.contains('.') {
+                    None
+                } else {
+                    self.columns
+                        .iter()
+                        .position(|c| c.rsplit('.').next() == Some(column))
+                }
+            })
             .and_then(|i| self.values.get(i))
     }
 }

@@ -50,6 +50,14 @@ struct TableData {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableSchema {
     pub column_types: HashMap<String, DataType>,
+    pub gist_indexes: Vec<GiSTDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GiSTDefinition {
+    pub name: String,
+    pub column: String,
+    pub index_type: crate::index::GiSTIndexType,
 }
 
 /// Metadata written to `table:<name>:meta`. Rows live in separate
@@ -147,7 +155,7 @@ impl<'de> Deserialize<'de> for Table {
                 values,
             })
             .collect();
-        Ok(Table {
+        let mut table = Table {
             name: data.name,
             schema: data.schema,
             columns: cols,
@@ -157,7 +165,9 @@ impl<'de> Deserialize<'de> for Table {
             typed_indexes: HashMap::new(),
             auto_increment_column: data.auto_increment_column,
             next_auto_increment_id: data.next_auto_increment_id.max(1),
-        })
+        };
+        table.rebuild_gist_indexes();
+        Ok(table)
     }
 }
 
@@ -209,8 +219,38 @@ impl Table {
         for (_col_name, index) in &mut self.indexes {
             index.insert(&row, row_idx);
         }
+        for index in self.typed_indexes.values_mut() {
+            if let IndexType::GiST(index) = index {
+                if let Some(value) = row.get(&index.column_name) {
+                    index.insert(row_idx, value);
+                }
+            }
+        }
 
         self.rows.push(row);
+    }
+
+    pub fn rebuild_gist_indexes(&mut self) {
+        for def in &self.schema.gist_indexes {
+            let index = self
+                .typed_indexes
+                .entry(def.name.clone())
+                .or_insert_with(|| {
+                    IndexType::GiST(GiSTIndex::new(
+                        def.name.clone(),
+                        def.column.clone(),
+                        def.index_type,
+                    ))
+                });
+            if let IndexType::GiST(index) = index {
+                index.clear();
+                for (id, row) in self.rows.iter().enumerate() {
+                    if let Some(value) = row.get(&def.column) {
+                        index.insert(id, value);
+                    }
+                }
+            }
+        }
     }
 
     /// Geometry accepts either a typed value or WKT. Other existing column

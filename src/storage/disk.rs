@@ -235,7 +235,7 @@ impl DiskStorage {
             })
             .collect();
 
-        Ok(Some(Table {
+        let mut table = Table {
             name: meta.name,
             schema: db
                 .get(format!("table:{}:schema", name))
@@ -250,7 +250,9 @@ impl DiskStorage {
             typed_indexes: HashMap::new(),
             auto_increment_column: meta.auto_increment_column,
             next_auto_increment_id: meta.next_auto_increment_id.max(1),
-        }))
+        };
+        table.rebuild_gist_indexes();
+        Ok(Some(table))
     }
 
     pub fn list_tables(&self) -> Result<Vec<String>> {

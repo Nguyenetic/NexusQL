@@ -8,6 +8,7 @@ pub mod default;
 pub mod executor;
 pub mod hdc;
 pub mod sort;
+mod spatial;
 
 use crate::{
     types::{ResultSet, Value},

@@ -168,6 +168,7 @@ impl StorageEngine for DefaultEngine {
         if !self.is_memory {
             let touched_table = match &statement {
                 crate::query::Statement::CreateTable { name, .. }
+                | crate::query::Statement::CreateIndex { table: name, .. }
                 | crate::query::Statement::Insert { table: name, .. }
                 | crate::query::Statement::Update { table: name, .. }
                 | crate::query::Statement::Delete { from: name, .. } => Some(name.clone()),

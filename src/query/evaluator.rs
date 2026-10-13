@@ -61,7 +61,21 @@ pub fn evaluate_where(row: &Row, expr: &Expr, params: &QueryParams) -> bool {
 /// Evaluate any expression
 pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
     match expr {
-        Expr::Column(col_name) => row.get(col_name).cloned().unwrap_or(Value::Null),
+        Expr::Column(col_name) => row
+            .get(col_name)
+            .or_else(|| {
+                // Single-table scans carry bare column names. Join rows are fully
+                // qualified, so never use this fallback when qualifiers are present.
+                if !row.columns.iter().any(|c| c.contains('.')) {
+                    col_name
+                        .rsplit_once('.')
+                        .and_then(|(_, name)| row.get(name))
+                } else {
+                    None
+                }
+            })
+            .cloned()
+            .unwrap_or(Value::Null),
 
         Expr::Literal(val) => val.clone(),
 

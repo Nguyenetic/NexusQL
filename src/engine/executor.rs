@@ -343,11 +343,29 @@ impl Executor {
                             }
                             "gist" => {
                                 // Create GiST index for geometric/spatial data
-                                let gist_index = crate::index::GiSTIndex::new(
+                                let index_type = if t.schema.column_types.get(first_col)
+                                    == Some(&DataType::Geometry)
+                                {
+                                    crate::index::GiSTIndexType::RTree
+                                } else {
+                                    crate::index::GiSTIndexType::RangeTree
+                                };
+                                let mut gist_index = crate::index::GiSTIndex::new(
                                     index_name.clone(),
                                     first_col.clone(),
-                                    crate::index::GiSTIndexType::RangeTree,
+                                    index_type,
                                 );
+                                for (id, row) in t.rows.iter().enumerate() {
+                                    if let Some(value) = row.values.get(col_idx) {
+                                        gist_index.insert(id, value);
+                                    }
+                                }
+                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
+                                    name: index_name.clone(),
+                                    column: first_col.clone(),
+                                    index_type,
+                                });
 
                                 t.typed_indexes.insert(
                                     index_name.clone(),
@@ -518,6 +536,7 @@ impl Executor {
                                     t.rows.retain(|existing| {
                                         existing.values.get(pk_idx) != Some(pk_value)
                                     });
+                                    t.rebuild_gist_indexes();
                                 }
                                 t.insert(row);
                             }
@@ -621,9 +640,34 @@ impl Executor {
 
                 let mut rows = if from.table.is_empty() {
                     vec![Row::new(vec![], vec![])]
+                } else if from.joins.is_empty() {
+                    let outer = Row::new(vec![], vec![]);
+                    if let Some(ids) = where_clause.as_ref().and_then(|expr| {
+                        super::spatial::candidates(
+                            table,
+                            from.alias.as_deref().unwrap_or(&from.table),
+                            expr,
+                            &outer,
+                            params,
+                        )
+                    }) {
+                        ids.into_iter()
+                            .filter_map(|id| table.rows.get(id).cloned())
+                            .collect()
+                    } else {
+                        table.select_all()
+                    }
                 } else {
                     table.select_all()
                 };
+
+                if from.alias.is_some() || !from.joins.is_empty() {
+                    let qualifier = from.alias.as_deref().unwrap_or(&from.table);
+                    rows = rows
+                        .iter()
+                        .map(|row| super::spatial::qualify(row, qualifier))
+                        .collect();
+                }
 
                 // Execute JOINs if present
                 if !from.joins.is_empty() {
@@ -695,10 +739,26 @@ impl Executor {
 
                 // Apply ORDER BY sorting (especially for vector distance)
                 if let Some(order) = order_by {
+                    // SELECT aliases refer to their expressions when sorting
+                    // source rows (projection happens after ORDER BY / LIMIT).
+                    let order_expr = if let Expr::Column(name) = &order.expr {
+                        columns
+                            .iter()
+                            .find_map(|item| match item {
+                                SelectItem::Expr {
+                                    expr,
+                                    alias: Some(alias),
+                                } if alias == name => Some(expr),
+                                _ => None,
+                            })
+                            .unwrap_or(&order.expr)
+                    } else {
+                        &order.expr
+                    };
                     rows.sort_by(|a, b| {
                         use crate::query::evaluator::evaluate_expr;
-                        let a_val = evaluate_expr(a, &order.expr, params);
-                        let b_val = evaluate_expr(b, &order.expr, params);
+                        let a_val = evaluate_expr(a, order_expr, params);
+                        let b_val = evaluate_expr(b, order_expr, params);
 
                         let cmp = a_val
                             .partial_cmp(&b_val)
@@ -740,7 +800,9 @@ impl Executor {
                 where_clause,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
-                    for row in &mut t.rows {
+                    // Validate the whole statement before replacing rows or index bounds.
+                    let mut updated = t.rows.clone();
+                    for row in &mut updated {
                         let should_update = where_clause
                             .as_ref()
                             .map(|expr| evaluate_where(row, expr, params))
@@ -761,6 +823,8 @@ impl Executor {
                             }
                         }
                     }
+                    t.rows = updated;
+                    t.rebuild_gist_indexes();
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(
@@ -776,6 +840,7 @@ impl Executor {
                     } else {
                         t.rows.clear();
                     }
+                    t.rebuild_gist_indexes();
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(
@@ -1148,7 +1213,11 @@ impl Executor {
                 match item {
                     SelectItem::Wildcard => {
                         // Add all columns from the original row
-                        result_cols.extend(row.columns.clone());
+                        result_cols.extend(
+                            row.columns
+                                .iter()
+                                .map(|c| c.rsplit('.').next().unwrap_or(c).to_string()),
+                        );
                         result_vals.extend(row.values.clone());
                     }
                     SelectItem::Expr { expr, alias } => {
@@ -1761,7 +1830,43 @@ impl Executor {
         let right_table = self.tables.get(&join.table).ok_or_else(|| {
             crate::NexusError::QueryError(format!("Table {} not found for JOIN", join.table))
         })?;
-        let right_rows = right_table.select_all();
+        let qualifier = join.alias.as_deref().unwrap_or(&join.table);
+        let right_rows: Vec<_> = right_table
+            .rows
+            .iter()
+            .map(|row| super::spatial::qualify(row, qualifier))
+            .collect();
+
+        // Parameterized index nested loop. Each outer row supplies the geometry
+        // for one R-tree probe; every candidate still goes through the exact ON.
+        if matches!(join.join_type, JoinType::Inner | JoinType::Left) {
+            let mut result = Vec::new();
+            for left in left_rows {
+                let ids = join.on_condition.as_ref().and_then(|expr| {
+                    super::spatial::candidates(right_table, qualifier, expr, left, params)
+                });
+                let rows: Box<dyn Iterator<Item = &Row> + '_> = if let Some(ids) = ids {
+                    Box::new(ids.into_iter().filter_map(|id| right_rows.get(id)))
+                } else {
+                    Box::new(right_rows.iter())
+                };
+                let mut matched = false;
+                for right in rows {
+                    if self.evaluate_join_condition(left, right, &join.on_condition, params) {
+                        result.push(self.merge_rows(left, right, &None));
+                        matched = true;
+                    }
+                }
+                if !matched && join.join_type == JoinType::Left {
+                    result.push(self.merge_rows_with_nulls(
+                        left,
+                        right_table,
+                        &Some(qualifier.to_string()),
+                    ));
+                }
+            }
+            return Ok(result);
+        }
 
         let mut result = Vec::new();
 
@@ -1904,7 +2009,9 @@ impl Executor {
 
         // Add right table columns with optional alias prefix
         for (i, col) in right.columns.iter().enumerate() {
-            let col_name = if let Some(alias) = right_alias {
+            let col_name = if col.contains('.') {
+                col.clone()
+            } else if let Some(alias) = right_alias {
                 format!("{}.{}", alias, col)
             } else {
                 // Prefix with table name to avoid conflicts
@@ -1959,7 +2066,9 @@ impl Executor {
 
         // Add right table columns with actual values
         for (i, col) in right.columns.iter().enumerate() {
-            let col_name = if let Some(alias) = right_alias {
+            let col_name = if col.contains('.') {
+                col.clone()
+            } else if let Some(alias) = right_alias {
                 format!("{}.{}", alias, col)
             } else {
                 col.clone()

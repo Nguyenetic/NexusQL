@@ -12,6 +12,24 @@
 //! - Lossy compression via bounding boxes
 
 use crate::types::Value;
+use rstar::{RTree, RTreeObject, AABB};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+
+#[derive(Debug, Clone, PartialEq)]
+struct SpatialEntry {
+    row_id: usize,
+    bounds: AABB<[f64; 2]>,
+}
+
+impl RTreeObject for SpatialEntry {
+    type Envelope = AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        self.bounds
+    }
+}
 
 /// GiST Index - Generalized Search Tree
 #[derive(Debug, Clone)]
@@ -24,6 +42,9 @@ pub struct GiSTIndex {
 
     /// Root node of the tree
     root: Option<Box<GiSTNode>>,
+    spatial: RTree<SpatialEntry>,
+    searches: Arc<AtomicU64>,
+    candidates: Arc<AtomicU64>,
 
     /// Index type (determines predicates and keys)
     index_type: GiSTIndexType,
@@ -33,7 +54,7 @@ pub struct GiSTIndex {
 }
 
 /// Type of GiST index
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GiSTIndexType {
     /// R-tree for 2D points and rectangles
     RTree,
@@ -104,6 +125,22 @@ pub enum GiSTPredicate {
 }
 
 impl GiSTPredicate {
+    fn envelope(&self) -> Option<AABB<[f64; 2]>> {
+        let (min, max) = match self {
+            Self::BoundingBox {
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+            } => ([*min_x, *min_y], [*max_x, *max_y]),
+            Self::Point { x, y } => ([*x, *y], [*x, *y]),
+            _ => return None,
+        };
+        if min.iter().chain(max.iter()).any(|n| !n.is_finite()) {
+            return None;
+        }
+        Some(AABB::from_corners(min, max))
+    }
     /// Check if this predicate contains another
     fn contains(&self, other: &GiSTPredicate) -> bool {
         match (self, other) {
@@ -265,6 +302,9 @@ impl GiSTIndex {
             name,
             column_name,
             root: None,
+            spatial: RTree::new(),
+            searches: Arc::new(AtomicU64::new(0)),
+            candidates: Arc::new(AtomicU64::new(0)),
             index_type,
             entry_count: 0,
         }
@@ -273,6 +313,13 @@ impl GiSTIndex {
     /// Insert a value into the index
     pub fn insert(&mut self, row_id: usize, value: &Value) {
         if let Some(predicate) = self.value_to_predicate(value) {
+            if self.index_type == GiSTIndexType::RTree {
+                if let Some(bounds) = predicate.envelope() {
+                    self.spatial.insert(SpatialEntry { row_id, bounds });
+                    self.entry_count += 1;
+                }
+                return;
+            }
             if self.root.is_some() {
                 if let Some(root) = &mut self.root {
                     Self::insert_into_node_static(root, predicate, row_id);
@@ -295,6 +342,14 @@ impl GiSTIndex {
     /// Convert value to predicate based on index type
     fn value_to_predicate(&self, value: &Value) -> Option<GiSTPredicate> {
         match (self.index_type, value) {
+            (GiSTIndexType::RTree, Value::Geometry(g)) => {
+                g.bounds().map(|b| GiSTPredicate::BoundingBox {
+                    min_x: b.min().x,
+                    min_y: b.min().y,
+                    max_x: b.max().x,
+                    max_y: b.max().y,
+                })
+            }
             (GiSTIndexType::RangeTree, Value::Integer(i)) => {
                 Some(GiSTPredicate::IntRange { min: *i, max: *i })
             }
@@ -345,14 +400,37 @@ impl GiSTIndex {
 
     /// Search for rows matching a predicate
     pub fn search(&self, query: &GiSTPredicate) -> Vec<usize> {
+        self.searches.fetch_add(1, Ordering::Relaxed);
         let mut results = Vec::new();
 
-        if let Some(root) = &self.root {
+        if self.index_type == GiSTIndexType::RTree {
+            if let Some(bounds) = query.envelope() {
+                results.extend(
+                    self.spatial
+                        .locate_in_envelope_intersecting(bounds)
+                        .map(|entry| entry.row_id),
+                );
+            }
+        } else if let Some(root) = &self.root {
             self.search_node(root, query, &mut results);
         }
 
+        self.candidates
+            .fetch_add(results.len() as u64, Ordering::Relaxed);
         results.sort_unstable();
         results
+    }
+
+    pub fn index_type(&self) -> GiSTIndexType {
+        self.index_type
+    }
+
+    /// Row IDs are vector offsets. Rebuild after a delete or update so offsets
+    /// and bounds cannot become stale; retain diagnostic counters.
+    pub fn clear(&mut self) {
+        self.root = None;
+        self.spatial = RTree::new();
+        self.entry_count = 0;
     }
 
     /// Search within a node
@@ -381,10 +459,26 @@ impl GiSTIndex {
         GiSTStats {
             entries_indexed: self.entry_count,
             tree_height: self.tree_height(),
+            search_count: self.searches.load(Ordering::Relaxed),
+            candidates_returned: self.candidates.load(Ordering::Relaxed),
         }
     }
 
     fn tree_height(&self) -> usize {
+        if self.index_type == GiSTIndexType::RTree {
+            fn height(parent: &rstar::ParentNode<SpatialEntry>) -> usize {
+                parent
+                    .children()
+                    .iter()
+                    .map(|node| match node {
+                        rstar::RTreeNode::Leaf(_) => 1,
+                        rstar::RTreeNode::Parent(child) => 1 + height(child),
+                    })
+                    .max()
+                    .unwrap_or(0)
+            }
+            return height(self.spatial.root());
+        }
         self.root.as_ref().map_or(0, |root| self.node_height(root))
     }
 
@@ -413,6 +507,9 @@ impl GiSTIndex {
 pub struct GiSTStats {
     pub entries_indexed: usize,
     pub tree_height: usize,
+    /// Actual search calls, including SQL scans and parameterized join probes.
+    pub search_count: u64,
+    pub candidates_returned: u64,
 }
 
 #[cfg(test)]
