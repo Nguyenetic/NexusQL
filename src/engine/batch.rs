@@ -52,6 +52,7 @@ impl BatchInsert {
             Value::Integer(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Text(s) => format!("'{}'", s.replace('\'', "''")),
+            Value::Geometry(g) => g.as_sql(),
             Value::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             Value::Null => "NULL".to_string(),
             Value::Blob(_) => "NULL".to_string(),

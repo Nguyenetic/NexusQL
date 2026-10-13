@@ -16,6 +16,8 @@ pub enum Value {
     /// Vector type for semantic search and embeddings
     /// Stored as f32 for efficiency (same as pgvector default)
     Vector(Vec<f32>),
+    /// Planar geometry, serialized without losing coordinates or SRID metadata.
+    Geometry(crate::geometry::GeometryValue),
 }
 
 // Helper functions for f64 serialization
@@ -44,6 +46,7 @@ impl std::fmt::Display for Value {
             Value::Integer(i) => write!(f, "{}", i),
             Value::Float(fl) => write!(f, "{}", fl),
             Value::Text(s) => write!(f, "{}", s),
+            Value::Geometry(g) => write!(f, "{}", g.as_text()),
             Value::Blob(b) => write!(f, "<blob {} bytes>", b.len()),
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Vector(v) => write!(
@@ -171,6 +174,7 @@ impl Value {
             Value::Blob(_) => "Blob",
             Value::Boolean(_) => "Boolean",
             Value::Vector(_) => "Vector",
+            Value::Geometry(_) => "Geometry",
         }
     }
 }
@@ -187,6 +191,7 @@ impl std::hash::Hash for Value {
             Value::Integer(i) => i.hash(state),
             Value::Float(f) => f.hash(state),
             Value::Text(s) => s.hash(state),
+            Value::Geometry(g) => g.hash(state),
             Value::Blob(b) => b.hash(state),
             Value::Boolean(b) => b.hash(state),
             Value::Vector(v) => {
@@ -206,6 +211,11 @@ impl PartialOrd for Value {
             (Value::Integer(a), Value::Integer(b)) => a.partial_cmp(b),
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
             (Value::Text(a), Value::Text(b)) => a.partial_cmp(b),
+            (Value::Geometry(a), Value::Geometry(b)) => Some(if a == b {
+                std::cmp::Ordering::Equal
+            } else {
+                (a.srid, a.as_text()).cmp(&(b.srid, b.as_text()))
+            }),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Null, Value::Null) => Some(std::cmp::Ordering::Equal),
             (Value::Vector(a), Value::Vector(b)) => {

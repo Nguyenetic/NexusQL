@@ -161,7 +161,7 @@ pub struct IndexOption {
     pub value: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum DataType {
     Integer,
     Float,
@@ -170,6 +170,7 @@ pub enum DataType {
     Boolean,
     /// Vector type with specified dimensions (e.g., VECTOR(384))
     Vector(usize),
+    Geometry,
 }
 
 /// SELECT list item (what appears in SELECT clause)
@@ -281,10 +282,7 @@ pub struct SubqueryExpr {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TableRef {
     /// Simple table reference
-    Table {
-        name: String,
-        alias: Option<String>,
-    },
+    Table { name: String, alias: Option<String> },
     /// Derived table (subquery in FROM clause)
     Subquery {
         subquery: Box<SubqueryExpr>,

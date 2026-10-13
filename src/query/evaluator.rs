@@ -133,20 +133,22 @@ fn cast_value(value: Value, target_type: &crate::query::ast::DataType) -> Value 
     match (value, target_type) {
         // NULL stays NULL
         (Value::Null, _) => Value::Null,
+        (Value::Geometry(g), DataType::Geometry) => Value::Geometry(g),
+        (Value::Text(s), DataType::Geometry) => crate::geometry::GeometryValue::from_wkt(&s)
+            .map(Value::Geometry)
+            .unwrap_or(Value::Null),
+        (Value::Geometry(g), DataType::Text) => Value::Text(g.as_text()),
 
         // Cast to Integer
         (Value::Integer(i), DataType::Integer) => Value::Integer(i),
         (Value::Float(f), DataType::Integer) => Value::Integer(f.into_inner() as i64),
-        (Value::Text(s), DataType::Integer) => s
-            .parse::<i64>()
-            .map(Value::Integer)
-            .unwrap_or(Value::Null),
+        (Value::Text(s), DataType::Integer) => {
+            s.parse::<i64>().map(Value::Integer).unwrap_or(Value::Null)
+        }
         (Value::Boolean(b), DataType::Integer) => Value::Integer(if b { 1 } else { 0 }),
 
         // Cast to Float
-        (Value::Integer(i), DataType::Float) => {
-            Value::Float(ordered_float::OrderedFloat(i as f64))
-        }
+        (Value::Integer(i), DataType::Float) => Value::Float(ordered_float::OrderedFloat(i as f64)),
         (Value::Float(f), DataType::Float) => Value::Float(f),
         (Value::Text(s), DataType::Float) => s
             .parse::<f64>()
@@ -160,9 +162,11 @@ fn cast_value(value: Value, target_type: &crate::query::ast::DataType) -> Value 
         (Value::Integer(i), DataType::Text) => Value::Text(i.to_string()),
         (Value::Float(f), DataType::Text) => Value::Text(f.to_string()),
         (Value::Text(s), DataType::Text) => Value::Text(s),
-        (Value::Boolean(b), DataType::Text) => {
-            Value::Text(if b { "true".to_string() } else { "false".to_string() })
-        }
+        (Value::Boolean(b), DataType::Text) => Value::Text(if b {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }),
         (Value::Vector(v), DataType::Text) => {
             let formatted = v
                 .iter()
@@ -187,10 +191,8 @@ fn cast_value(value: Value, target_type: &crate::query::ast::DataType) -> Value 
             let trimmed = s.trim();
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
                 let inner = &trimmed[1..trimmed.len() - 1];
-                let result: Result<Vec<f32>, _> = inner
-                    .split(',')
-                    .map(|s| s.trim().parse::<f32>())
-                    .collect();
+                let result: Result<Vec<f32>, _> =
+                    inner.split(',').map(|s| s.trim().parse::<f32>()).collect();
                 match result {
                     Ok(v) => Value::Vector(v),
                     Err(_) => Value::Null,
@@ -288,6 +290,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::Text(a), Value::Text(b)) => a == b,
+        (Value::Geometry(a), Value::Geometry(b)) => a == b,
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Null, Value::Null) => true,
         // Cross-type comparisons for SQL compatibility
@@ -346,6 +349,13 @@ fn to_bool(val: &Value) -> bool {
 /// Evaluate function calls (built-in functions)
 fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams) -> Value {
     let name_upper = name.to_uppercase();
+    if name_upper.starts_with("ST_") {
+        let values: Vec<_> = args
+            .iter()
+            .map(|arg| evaluate_expr(row, arg, params))
+            .collect();
+        return crate::geometry::evaluate(&name_upper, &values);
+    }
 
     match name_upper.as_str() {
         // Vector distance functions (pgvector-compatible)
@@ -500,7 +510,6 @@ fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams)
         // Hypervectors are carried through SQL as Value::Blob holding the
         // variant-tagged byte format produced by Hypervector::to_bytes().
         // Callers can store them in any Blob-typed column.
-
         "HV_ATOM" => {
             // hv_atom(kind TEXT, key TEXT, dim INT, variant TEXT)
             //   -> Blob of a deterministic hypervector derived from
@@ -755,7 +764,11 @@ mod tests {
             panic!("expected Blob");
         };
         assert_eq!(
-            evaluate_expr(&row, &hv_call("HV_VARIANT", vec![lit(Value::Blob(bytes))]), &params),
+            evaluate_expr(
+                &row,
+                &hv_call("HV_VARIANT", vec![lit(Value::Blob(bytes))]),
+                &params
+            ),
             Value::Text("MAP".into())
         );
     }
@@ -797,10 +810,7 @@ mod tests {
             &row,
             &hv_call(
                 "HV_SIMILARITY",
-                vec![
-                    lit(Value::Blob(bytes.clone())),
-                    lit(Value::Blob(bytes)),
-                ],
+                vec![lit(Value::Blob(bytes.clone())), lit(Value::Blob(bytes))],
             ),
             &params,
         );
@@ -901,7 +911,10 @@ mod tests {
         assert_eq!(
             evaluate_expr(
                 &row,
-                &hv_call("HV_SIMILARITY", vec![lit(Value::Blob(bsc)), lit(Value::Blob(map))]),
+                &hv_call(
+                    "HV_SIMILARITY",
+                    vec![lit(Value::Blob(bsc)), lit(Value::Blob(map))]
+                ),
                 &params,
             ),
             Value::Null
@@ -1005,7 +1018,10 @@ mod tests {
                 &row,
                 &hv_call(
                     "HV_SIMILARITY",
-                    vec![lit(Value::Blob(bundle.clone())), lit(Value::Blob(seed_bytes))],
+                    vec![
+                        lit(Value::Blob(bundle.clone())),
+                        lit(Value::Blob(seed_bytes)),
+                    ],
                 ),
                 &params,
             ) else {
@@ -1052,7 +1068,10 @@ mod tests {
         let b = mk("role", "reason");
         let sim = evaluate_expr(
             &row,
-            &hv_call("HV_SIMILARITY", vec![lit(Value::Blob(a)), lit(Value::Blob(b))]),
+            &hv_call(
+                "HV_SIMILARITY",
+                vec![lit(Value::Blob(a)), lit(Value::Blob(b))],
+            ),
             &params,
         );
         let Value::Float(s) = sim else {
@@ -1070,16 +1089,11 @@ mod tests {
             &row,
             &hv_call(
                 "HV_SIMILARITY",
-                vec![
-                    lit(Value::Blob(mk("role", "status"))),
-                    lit(Value::Blob(c)),
-                ],
+                vec![lit(Value::Blob(mk("role", "status"))), lit(Value::Blob(c))],
             ),
             &params,
         );
-        let Value::Float(s2) = sim2 else {
-            panic!()
-        };
+        let Value::Float(s2) = sim2 else { panic!() };
         assert!(s2.into_inner().abs() < 0.05);
     }
 

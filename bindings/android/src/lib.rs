@@ -57,7 +57,10 @@ pub extern "C" fn Java_app_shiori_hibiki_nexusql_NexusQL_nativeOpen(
     }) {
         Ok(k) => k,
         Err(e) => {
-            let _ = env.throw_new("java/lang/RuntimeException", format!("NexusQL open failed: {e}"));
+            let _ = env.throw_new(
+                "java/lang/RuntimeException",
+                format!("NexusQL open failed: {e}"),
+            );
             return 0;
         }
     };
@@ -170,6 +173,7 @@ fn value_to_string(val: &nexusql::types::Value) -> String {
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.into_inner().to_string(),
         Value::Text(t) => t.clone(),
+        Value::Geometry(g) => g.as_text(),
         Value::Boolean(b) => b.to_string(),
         Value::Blob(b) => format!("<blob {} bytes>", b.len()),
         Value::Vector(v) => format!("<vector dim={}>", v.len()),

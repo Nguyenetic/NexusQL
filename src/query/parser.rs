@@ -4,9 +4,9 @@
 use crate::query::ast::{
     BinaryOperator, Cardinality, ColumnDef, CommonTableExpr, DataType, Expr, FetchClause,
     FromClause, IndexOption, JoinClause, JoinType, OnConflict, OrderBy, Relationship, SelectItem,
-    SetOperator, Statement, SubqueryExpr, TableRef, TraverseClause, TraverseDirection,
-    TraverseMode, TraversePattern, TransactionOp, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowOrderBy, WindowSpec,
+    SetOperator, Statement, SubqueryExpr, TableRef, TransactionOp, TraverseClause,
+    TraverseDirection, TraverseMode, TraversePattern, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowOrderBy, WindowSpec,
 };
 use crate::types::Value;
 use crate::{NexusError, Result};
@@ -190,7 +190,8 @@ impl QueryParser {
         }
 
         let inner_content = &brace_content[..close_pos];
-        let total_consumed = 6 + relationship_end + (after_rel.len() - brace_content.len()) + close_pos + 2;
+        let total_consumed =
+            6 + relationship_end + (after_rel.len() - brace_content.len()) + close_pos + 2;
 
         // Parse the inner content: columns, WHERE, ORDER BY, LIMIT, nested FETCH
         let (columns, where_clause, order_by, limit, nested_fetch) =
@@ -636,10 +637,7 @@ impl QueryParser {
         let pattern_str = pattern_str.trim();
 
         // Simple pattern: just relationship name
-        if pattern_str
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_')
-        {
+        if pattern_str.chars().all(|c| c.is_alphanumeric() || c == '_') {
             return Ok(TraversePattern {
                 source_label: None,
                 relationship_type: pattern_str.to_string(),
@@ -1083,7 +1081,7 @@ impl QueryParser {
                 let order_by = if let Some(order_by_clause) = &query.order_by {
                     if !order_by_clause.exprs.is_empty() {
                         let order_item = &order_by_clause.exprs[0];
-                        let expr = self.convert_where_expr(&order_item.expr)?;
+                        let expr = self.convert_expr_to_ast(&order_item.expr)?;
                         let ascending = order_item.asc.unwrap_or(true);
                         Some(OrderBy { expr, ascending })
                     } else {
@@ -1094,12 +1092,13 @@ impl QueryParser {
                 };
 
                 // Extract LIMIT
-                let limit =
-                    if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) = &query.limit {
-                        n.parse::<usize>().ok()
-                    } else {
-                        None
-                    };
+                let limit = if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) =
+                    &query.limit
+                {
+                    n.parse::<usize>().ok()
+                } else {
+                    None
+                };
 
                 // Extract WHERE clause
                 let where_clause = select
@@ -1114,12 +1113,10 @@ impl QueryParser {
                         // GROUP BY ALL is not commonly supported, treat as empty
                         vec![]
                     }
-                    sql_ast::GroupByExpr::Expressions(exprs, _modifiers) => {
-                        exprs
-                            .iter()
-                            .map(|expr| self.convert_expr_to_ast(expr))
-                            .collect::<Result<Vec<_>>>()?
-                    }
+                    sql_ast::GroupByExpr::Expressions(exprs, _modifiers) => exprs
+                        .iter()
+                        .map(|expr| self.convert_expr_to_ast(expr))
+                        .collect::<Result<Vec<_>>>()?,
                 };
 
                 // Extract HAVING clause
@@ -1209,12 +1206,13 @@ impl QueryParser {
                     None
                 };
 
-                let limit =
-                    if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) = &query.limit {
-                        n.parse::<usize>().ok()
-                    } else {
-                        None
-                    };
+                let limit = if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) =
+                    &query.limit
+                {
+                    n.parse::<usize>().ok()
+                } else {
+                    None
+                };
 
                 Ok(Statement::SetOperation {
                     left: Box::new(left_stmt),
@@ -1491,9 +1489,7 @@ impl QueryParser {
                             Expr::Literal(Value::Integer(n)) => {
                                 Ok(Expr::Literal(Value::Integer(-n)))
                             }
-                            Expr::Literal(Value::Float(f)) => {
-                                Ok(Expr::Literal(Value::Float(-f)))
-                            }
+                            Expr::Literal(Value::Float(f)) => Ok(Expr::Literal(Value::Float(-f))),
                             _ => Err(NexusError::ParseError(
                                 "Unary minus only supported on numeric literals".to_string(),
                             )),
@@ -1768,10 +1764,7 @@ impl QueryParser {
     }
 
     /// Convert WITH clause (CTEs) from sqlparser
-    fn convert_with_clause(
-        &self,
-        with: &Option<sql_ast::With>,
-    ) -> Result<Vec<CommonTableExpr>> {
+    fn convert_with_clause(&self, with: &Option<sql_ast::With>) -> Result<Vec<CommonTableExpr>> {
         match with {
             Some(with_clause) => {
                 let recursive = with_clause.recursive;
@@ -1783,13 +1776,7 @@ impl QueryParser {
                         let columns = if cte.alias.columns.is_empty() {
                             None
                         } else {
-                            Some(
-                                cte.alias
-                                    .columns
-                                    .iter()
-                                    .map(|c| c.value.clone())
-                                    .collect(),
-                            )
+                            Some(cte.alias.columns.iter().map(|c| c.value.clone()).collect())
                         };
                         let query = self.convert_query_to_subquery(&cte.query)?;
                         Ok(CommonTableExpr {
@@ -1967,7 +1954,11 @@ impl QueryParser {
                 joins,
             });
         }
-        Err(NexusError::ParseError("No table in FROM clause".into()))
+        Ok(FromClause {
+            table: String::new(),
+            alias: None,
+            joins: vec![],
+        })
     }
 
     /// Convert a sqlparser Join to NexusQL JoinClause
@@ -2004,11 +1995,7 @@ impl QueryParser {
                 (JoinType::Full, condition)
             }
             sql_ast::JoinOperator::CrossJoin => (JoinType::Cross, None),
-            _ => {
-                return Err(NexusError::ParseError(
-                    "Unsupported JOIN type".into(),
-                ))
-            }
+            _ => return Err(NexusError::ParseError("Unsupported JOIN type".into())),
         };
 
         Ok(JoinClause {
@@ -2054,6 +2041,9 @@ impl QueryParser {
             sql_ast::DataType::Boolean => DataType::Boolean,
             // VECTOR(n) data type for embeddings
             sql_ast::DataType::Custom(obj_name, args) => {
+                if obj_name.to_string().eq_ignore_ascii_case("GEOMETRY") {
+                    return DataType::Geometry;
+                }
                 if obj_name.to_string().to_uppercase() == "VECTOR" && !args.is_empty() {
                     // Extract dimension from VECTOR(384)
                     // args is Vec<String>, so parse the first arg
@@ -2343,7 +2333,10 @@ mod tests {
                 assert_eq!(columns.len(), 1);
                 if let SelectItem::Expr { expr, .. } = &columns[0] {
                     match expr {
-                        Expr::Cast { expr: inner, data_type } => {
+                        Expr::Cast {
+                            expr: inner,
+                            data_type,
+                        } => {
                             assert_eq!(*data_type, DataType::Float);
                             if let Expr::Column(col) = inner.as_ref() {
                                 assert_eq!(col, "price");
@@ -2364,10 +2357,9 @@ mod tests {
     #[test]
     fn test_parse_create_index_using_hnsw() {
         // Test CREATE INDEX ... USING hnsw
-        let stmt = QueryParser::parse(
-            "CREATE INDEX idx_vectors ON documents USING hnsw (embedding)",
-        )
-        .unwrap();
+        let stmt =
+            QueryParser::parse("CREATE INDEX idx_vectors ON documents USING hnsw (embedding)")
+                .unwrap();
         match stmt {
             Statement::CreateIndex {
                 name,
@@ -2388,10 +2380,8 @@ mod tests {
     #[test]
     fn test_parse_create_index_using_gin() {
         // Test CREATE INDEX ... USING gin
-        let stmt = QueryParser::parse(
-            "CREATE INDEX idx_content ON documents USING gin (content)",
-        )
-        .unwrap();
+        let stmt = QueryParser::parse("CREATE INDEX idx_content ON documents USING gin (content)")
+            .unwrap();
         match stmt {
             Statement::CreateIndex {
                 name,
@@ -2437,10 +2427,7 @@ mod tests {
 
     #[test]
     fn test_parse_union() {
-        let stmt = QueryParser::parse(
-            "SELECT id FROM users UNION SELECT id FROM admins",
-        )
-        .unwrap();
+        let stmt = QueryParser::parse("SELECT id FROM users UNION SELECT id FROM admins").unwrap();
         match stmt {
             Statement::SetOperation { op, .. } => {
                 assert_eq!(op, SetOperator::Union);
@@ -2451,10 +2438,8 @@ mod tests {
 
     #[test]
     fn test_parse_union_all() {
-        let stmt = QueryParser::parse(
-            "SELECT name FROM users UNION ALL SELECT name FROM guests",
-        )
-        .unwrap();
+        let stmt =
+            QueryParser::parse("SELECT name FROM users UNION ALL SELECT name FROM guests").unwrap();
         match stmt {
             Statement::SetOperation { op, .. } => {
                 assert_eq!(op, SetOperator::UnionAll);
@@ -2479,10 +2464,9 @@ mod tests {
 
     #[test]
     fn test_parse_except() {
-        let stmt = QueryParser::parse(
-            "SELECT id FROM all_users EXCEPT SELECT id FROM banned_users",
-        )
-        .unwrap();
+        let stmt =
+            QueryParser::parse("SELECT id FROM all_users EXCEPT SELECT id FROM banned_users")
+                .unwrap();
         match stmt {
             Statement::SetOperation { op, .. } => {
                 assert_eq!(op, SetOperator::Except);
@@ -2498,7 +2482,12 @@ mod tests {
         )
         .unwrap();
         match stmt {
-            Statement::SetOperation { op, order_by, limit, .. } => {
+            Statement::SetOperation {
+                op,
+                order_by,
+                limit,
+                ..
+            } => {
                 assert_eq!(op, SetOperator::Union);
                 assert!(order_by.is_some());
                 assert_eq!(limit, Some(10));
@@ -2511,11 +2500,15 @@ mod tests {
 
     #[test]
     fn test_parse_select_with_fetch() {
-        let stmt = QueryParser::parse(
-            "SELECT id, name FROM users FETCH orders { id, total }"
-        ).unwrap();
+        let stmt =
+            QueryParser::parse("SELECT id, name FROM users FETCH orders { id, total }").unwrap();
         match stmt {
-            Statement::Select { columns, from, fetch, .. } => {
+            Statement::Select {
+                columns,
+                from,
+                fetch,
+                ..
+            } => {
                 assert_eq!(from.table, "users");
                 assert_eq!(columns.len(), 2);
                 assert_eq!(fetch.len(), 1);
@@ -2529,8 +2522,9 @@ mod tests {
     #[test]
     fn test_parse_fetch_with_where() {
         let stmt = QueryParser::parse(
-            "SELECT id FROM posts FETCH comments { id, content WHERE approved = true }"
-        ).unwrap();
+            "SELECT id FROM posts FETCH comments { id, content WHERE approved = true }",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { fetch, .. } => {
                 assert_eq!(fetch.len(), 1);
@@ -2544,8 +2538,9 @@ mod tests {
     #[test]
     fn test_parse_fetch_with_order_limit() {
         let stmt = QueryParser::parse(
-            "SELECT id FROM users FETCH orders { id, total ORDER BY total DESC LIMIT 5 }"
-        ).unwrap();
+            "SELECT id FROM users FETCH orders { id, total ORDER BY total DESC LIMIT 5 }",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { fetch, .. } => {
                 assert_eq!(fetch.len(), 1);
@@ -2561,8 +2556,9 @@ mod tests {
     #[test]
     fn test_parse_nested_fetch() {
         let stmt = QueryParser::parse(
-            "SELECT id FROM users FETCH orders { id FETCH items { name, price } }"
-        ).unwrap();
+            "SELECT id FROM users FETCH orders { id FETCH items { name, price } }",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { fetch, .. } => {
                 assert_eq!(fetch.len(), 1);
@@ -2577,8 +2573,9 @@ mod tests {
     #[test]
     fn test_parse_multiple_fetch() {
         let stmt = QueryParser::parse(
-            "SELECT id FROM users FETCH orders { id } FETCH profile { avatar_url }"
-        ).unwrap();
+            "SELECT id FROM users FETCH orders { id } FETCH profile { avatar_url }",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { fetch, .. } => {
                 assert_eq!(fetch.len(), 2);
@@ -2594,8 +2591,9 @@ mod tests {
     #[test]
     fn test_parse_create_relationship_one() {
         let stmt = QueryParser::parse(
-            "CREATE RELATIONSHIP author_rel FROM posts.author_id TO users.id AS ONE"
-        ).unwrap();
+            "CREATE RELATIONSHIP author_rel FROM posts.author_id TO users.id AS ONE",
+        )
+        .unwrap();
         match stmt {
             Statement::CreateRelationship(rel) => {
                 assert_eq!(rel.name, "author_rel");
@@ -2612,8 +2610,9 @@ mod tests {
     #[test]
     fn test_parse_create_relationship_many() {
         let stmt = QueryParser::parse(
-            "CREATE RELATIONSHIP orders_rel FROM users.id TO orders.user_id AS MANY"
-        ).unwrap();
+            "CREATE RELATIONSHIP orders_rel FROM users.id TO orders.user_id AS MANY",
+        )
+        .unwrap();
         match stmt {
             Statement::CreateRelationship(rel) => {
                 assert_eq!(rel.name, "orders_rel");
@@ -2631,11 +2630,14 @@ mod tests {
 
     #[test]
     fn test_parse_traverse_simple() {
-        let stmt = QueryParser::parse(
-            "TRAVERSE FOLLOWS FROM users WHERE id = 1"
-        ).unwrap();
+        let stmt = QueryParser::parse("TRAVERSE FOLLOWS FROM users WHERE id = 1").unwrap();
         match stmt {
-            Statement::Traverse { clause, from_table, where_clause, .. } => {
+            Statement::Traverse {
+                clause,
+                from_table,
+                where_clause,
+                ..
+            } => {
                 assert_eq!(clause.pattern.relationship_type, "FOLLOWS");
                 assert_eq!(from_table, "users");
                 assert!(where_clause.is_some());
@@ -2646,9 +2648,8 @@ mod tests {
 
     #[test]
     fn test_parse_traverse_with_depth() {
-        let stmt = QueryParser::parse(
-            "TRAVERSE DEPTH 1..3 FOLLOWS FROM users WHERE id = 1"
-        ).unwrap();
+        let stmt =
+            QueryParser::parse("TRAVERSE DEPTH 1..3 FOLLOWS FROM users WHERE id = 1").unwrap();
         match stmt {
             Statement::Traverse { clause, .. } => {
                 assert_eq!(clause.min_depth, 1);
@@ -2664,7 +2665,12 @@ mod tests {
             "TRAVERSE (user)-[:FOLLOWS]->(friend) FROM users WHERE id = 1 RETURN friend.name LIMIT 10"
         ).unwrap();
         match stmt {
-            Statement::Traverse { clause, return_columns, limit, .. } => {
+            Statement::Traverse {
+                clause,
+                return_columns,
+                limit,
+                ..
+            } => {
                 assert_eq!(clause.pattern.relationship_type, "FOLLOWS");
                 assert_eq!(clause.pattern.direction, TraverseDirection::Outgoing);
                 assert!(!return_columns.is_empty());
@@ -2676,9 +2682,8 @@ mod tests {
 
     #[test]
     fn test_parse_traverse_incoming() {
-        let stmt = QueryParser::parse(
-            "TRAVERSE (a)<-[:PURCHASED]-(b) FROM products WHERE id = 1"
-        ).unwrap();
+        let stmt = QueryParser::parse("TRAVERSE (a)<-[:PURCHASED]-(b) FROM products WHERE id = 1")
+            .unwrap();
         match stmt {
             Statement::Traverse { clause, .. } => {
                 assert_eq!(clause.pattern.relationship_type, "PURCHASED");
@@ -2710,8 +2715,9 @@ mod tests {
     #[test]
     fn test_parse_left_join() {
         let stmt = QueryParser::parse(
-            "SELECT u.name, o.total FROM users u LEFT JOIN orders o ON u.id = o.user_id"
-        ).unwrap();
+            "SELECT u.name, o.total FROM users u LEFT JOIN orders o ON u.id = o.user_id",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { from, .. } => {
                 assert_eq!(from.table, "users");
@@ -2728,8 +2734,9 @@ mod tests {
     #[test]
     fn test_parse_right_join() {
         let stmt = QueryParser::parse(
-            "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id"
-        ).unwrap();
+            "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { from, .. } => {
                 assert_eq!(from.joins.len(), 1);
@@ -2742,8 +2749,9 @@ mod tests {
     #[test]
     fn test_parse_full_outer_join() {
         let stmt = QueryParser::parse(
-            "SELECT * FROM users FULL OUTER JOIN orders ON users.id = orders.user_id"
-        ).unwrap();
+            "SELECT * FROM users FULL OUTER JOIN orders ON users.id = orders.user_id",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { from, .. } => {
                 assert_eq!(from.joins.len(), 1);
@@ -2755,9 +2763,7 @@ mod tests {
 
     #[test]
     fn test_parse_cross_join() {
-        let stmt = QueryParser::parse(
-            "SELECT * FROM colors CROSS JOIN sizes"
-        ).unwrap();
+        let stmt = QueryParser::parse("SELECT * FROM colors CROSS JOIN sizes").unwrap();
         match stmt {
             Statement::Select { from, .. } => {
                 assert_eq!(from.table, "colors");
@@ -2775,8 +2781,9 @@ mod tests {
         let stmt = QueryParser::parse(
             "SELECT * FROM orders o \
              INNER JOIN users u ON o.user_id = u.id \
-             LEFT JOIN products p ON o.product_id = p.id"
-        ).unwrap();
+             LEFT JOIN products p ON o.product_id = p.id",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { from, .. } => {
                 assert_eq!(from.table, "orders");
@@ -2799,9 +2806,17 @@ mod tests {
 
     #[test]
     fn test_parse_group_by() {
-        let stmt = QueryParser::parse("SELECT department, COUNT(*) FROM employees GROUP BY department").unwrap();
+        let stmt =
+            QueryParser::parse("SELECT department, COUNT(*) FROM employees GROUP BY department")
+                .unwrap();
         match stmt {
-            Statement::Select { columns, from, group_by, having, .. } => {
+            Statement::Select {
+                columns,
+                from,
+                group_by,
+                having,
+                ..
+            } => {
                 assert_eq!(from.table, "employees");
                 assert_eq!(columns.len(), 2);
                 assert_eq!(group_by.len(), 1);
@@ -2814,7 +2829,10 @@ mod tests {
 
     #[test]
     fn test_parse_group_by_multiple() {
-        let stmt = QueryParser::parse("SELECT department, status, COUNT(*) FROM employees GROUP BY department, status").unwrap();
+        let stmt = QueryParser::parse(
+            "SELECT department, status, COUNT(*) FROM employees GROUP BY department, status",
+        )
+        .unwrap();
         match stmt {
             Statement::Select { group_by, .. } => {
                 assert_eq!(group_by.len(), 2);
@@ -2829,7 +2847,9 @@ mod tests {
     fn test_parse_group_by_with_having() {
         let stmt = QueryParser::parse("SELECT department, COUNT(*) as cnt FROM employees GROUP BY department HAVING COUNT(*) > 5").unwrap();
         match stmt {
-            Statement::Select { group_by, having, .. } => {
+            Statement::Select {
+                group_by, having, ..
+            } => {
                 assert_eq!(group_by.len(), 1);
                 assert!(having.is_some());
                 // HAVING should be a comparison: COUNT(*) > 5
@@ -2849,7 +2869,12 @@ mod tests {
             "SELECT department, AVG(salary) FROM employees WHERE status = 'active' GROUP BY department HAVING AVG(salary) > 50000"
         ).unwrap();
         match stmt {
-            Statement::Select { where_clause, group_by, having, .. } => {
+            Statement::Select {
+                where_clause,
+                group_by,
+                having,
+                ..
+            } => {
                 assert!(where_clause.is_some());
                 assert_eq!(group_by.len(), 1);
                 assert!(having.is_some());
@@ -2862,7 +2887,9 @@ mod tests {
     fn test_parse_group_by_without_having() {
         let stmt = QueryParser::parse("SELECT name FROM users").unwrap();
         match stmt {
-            Statement::Select { group_by, having, .. } => {
+            Statement::Select {
+                group_by, having, ..
+            } => {
                 assert!(group_by.is_empty());
                 assert!(having.is_none());
             }
@@ -2874,10 +2901,9 @@ mod tests {
 
     #[test]
     fn test_parse_in_subquery() {
-        let stmt = QueryParser::parse(
-            "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)",
-        )
-        .unwrap();
+        let stmt =
+            QueryParser::parse("SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)")
+                .unwrap();
         match stmt {
             Statement::Select { where_clause, .. } => {
                 assert!(where_clause.is_some());
@@ -2895,10 +2921,9 @@ mod tests {
 
     #[test]
     fn test_parse_not_in_subquery() {
-        let stmt = QueryParser::parse(
-            "SELECT * FROM users WHERE id NOT IN (SELECT user_id FROM banned)",
-        )
-        .unwrap();
+        let stmt =
+            QueryParser::parse("SELECT * FROM users WHERE id NOT IN (SELECT user_id FROM banned)")
+                .unwrap();
         match stmt {
             Statement::Select { where_clause, .. } => {
                 let where_expr = where_clause.unwrap();
@@ -3013,7 +3038,10 @@ mod tests {
                 if let SelectItem::Expr { expr, alias } = &columns[1] {
                     assert_eq!(alias.as_ref().map(|s| s.as_str()), Some("rn"));
                     match expr {
-                        Expr::WindowFunction { function, window_spec } => {
+                        Expr::WindowFunction {
+                            function,
+                            window_spec,
+                        } => {
                             if let Expr::Function { name, .. } = function.as_ref() {
                                 assert_eq!(name, "ROW_NUMBER");
                             }

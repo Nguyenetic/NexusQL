@@ -225,6 +225,7 @@ impl JsonbFunctions {
                 .map(serde_json::Value::Number)
                 .unwrap_or(serde_json::Value::Null),
             Value::Text(s) => serde_json::Value::String(s),
+            Value::Geometry(g) => serde_json::Value::String(g.as_text()),
             Value::Boolean(b) => serde_json::Value::Bool(b),
             Value::Null => serde_json::Value::Null,
             Value::Blob(_) => serde_json::Value::Null,

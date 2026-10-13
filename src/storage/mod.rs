@@ -5,6 +5,7 @@ pub mod disk;
 pub mod wal;
 
 use crate::index::{BRINIndex, BTreeIndex, GINIndex, GiSTIndex, HNSWIndex};
+use crate::query::ast::DataType;
 use crate::types::{Row, Value};
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,14 @@ struct TableData {
     auto_increment_column: Option<String>,
     #[serde(default)]
     next_auto_increment_id: i64,
+    #[serde(default)]
+    schema: TableSchema,
+}
+
+/// Kept in a separate disk key so pre-geometry table metadata remains readable.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TableSchema {
+    pub column_types: HashMap<String, DataType>,
 }
 
 /// Metadata written to `table:<name>:meta`. Rows live in separate
@@ -71,6 +80,7 @@ pub(crate) struct TableMetaSer<'a> {
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
+    pub schema: TableSchema,
     pub columns: Vec<String>,
     pub rows: Vec<Row>,
 
@@ -104,6 +114,7 @@ impl Serialize for Table {
             row_values: &row_values,
             auto_increment_column: &self.auto_increment_column,
             next_auto_increment_id: self.next_auto_increment_id,
+            schema: &self.schema,
         };
         data.serialize(serializer)
     }
@@ -118,6 +129,7 @@ struct TableDataSer<'a> {
     row_values: &'a Vec<&'a Vec<Value>>,
     auto_increment_column: &'a Option<String>,
     next_auto_increment_id: i64,
+    schema: &'a TableSchema,
 }
 
 impl<'de> Deserialize<'de> for Table {
@@ -137,6 +149,7 @@ impl<'de> Deserialize<'de> for Table {
             .collect();
         Ok(Table {
             name: data.name,
+            schema: data.schema,
             columns: cols,
             rows,
             // Indexes + typed_indexes must be rebuilt after load
@@ -152,6 +165,7 @@ impl Table {
     pub fn new(name: String, columns: Vec<String>) -> Self {
         Self {
             name,
+            schema: TableSchema::default(),
             columns,
             rows: Vec::new(),
             indexes: HashMap::new(),
@@ -197,6 +211,33 @@ impl Table {
         }
 
         self.rows.push(row);
+    }
+
+    /// Geometry accepts either a typed value or WKT. Other existing column
+    /// coercion behavior is unchanged.
+    pub fn coerce_values(&self, values: &mut [Value]) -> Result<()> {
+        for (column, value) in self.columns.iter().zip(values) {
+            if self.schema.column_types.get(column) == Some(&DataType::Geometry) {
+                Self::coerce_geometry(value)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn coerce_geometry(value: &mut Value) -> Result<()> {
+        match value {
+            Value::Null | Value::Geometry(_) => Ok(()),
+            Value::Text(text) => {
+                *value = Value::Geometry(
+                    crate::geometry::GeometryValue::from_wkt(text)
+                        .map_err(crate::NexusError::QueryError)?,
+                );
+                Ok(())
+            }
+            _ => Err(crate::NexusError::QueryError(
+                "GEOMETRY requires WKT or a geometry value".into(),
+            )),
+        }
     }
 
     /// Point query using index if available
