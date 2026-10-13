@@ -132,11 +132,20 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 npm install @nguyenetic/nexusql
 ```
 
-### Python (Coming Soon)
+### Python (build from source)
 
 ```bash
-pip install nexusql
+cd bindings/python
+python -m venv .venv
+# Activate .venv (Windows: .venv\Scripts\activate; Unix: source .venv/bin/activate)
+python -m pip install maturin pytest
+maturin develop
+pytest -q
 ```
+
+The native binding supports parameterized `execute(sql, params)`, direct bulk
+inserts, and WKT geometry values. See the [Python guide](bindings/python/README.md)
+and [spatial SQL guide](docs/guides/geometry.md).
 
 ### Rust
 
