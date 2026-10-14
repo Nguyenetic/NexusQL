@@ -78,6 +78,7 @@ impl FastBatchInsert {
 
                 // Inline value serialization to avoid extra allocations
                 match value {
+                    Value::Geometry(g) => self.sql_buffer.push_str(&g.as_sql()),
                     Value::Integer(i) => {
                         use std::fmt::Write;
                         let _ = write!(&mut self.sql_buffer, "{}", i);
@@ -146,6 +147,12 @@ impl FastBatchInsert {
             // Write each value
             for value in row {
                 match value {
+                    Value::Geometry(g) => {
+                        buffer.push(7); // Type: Geometry (WKT with optional SRID).
+                        let text = format!("SRID={};{}", g.srid.unwrap_or(0), g.as_text());
+                        buffer.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                        buffer.extend_from_slice(text.as_bytes());
+                    }
                     Value::Integer(i) => {
                         buffer.push(1); // Type: Integer
                         buffer.extend_from_slice(&i.to_le_bytes());

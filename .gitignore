@@ -12,6 +12,7 @@ build/
 
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 *.so
@@ -25,6 +26,7 @@ build/
 
 # Rust
 target/
+*.pdb
 Cargo.lock
 **/*.rs.bk
 

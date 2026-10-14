@@ -272,6 +272,7 @@ impl PartitionedTable {
             Value::Integer(i) => i.hash(&mut hasher),
             Value::Float(f) => f.hash(&mut hasher),
             Value::Text(s) => s.hash(&mut hasher),
+            Value::Geometry(g) => g.hash(&mut hasher),
             Value::Boolean(b) => b.hash(&mut hasher),
             Value::Null => 0usize.hash(&mut hasher),
             Value::Blob(b) => b.hash(&mut hasher),

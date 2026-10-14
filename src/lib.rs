@@ -3,6 +3,7 @@
 
 pub mod engine;
 pub mod error;
+pub mod geometry;
 pub mod index;
 pub mod kernel;
 pub mod optimizer;
@@ -222,10 +223,7 @@ impl NexusSQL {
                         None => {
                             // Table not found / unknown schema — let the
                             // full parser produce the proper error.
-                            return self
-                                .kernel
-                                .execute_with_params(sql, Vec::new())
-                                .await;
+                            return self.kernel.execute_with_params(sql, Vec::new()).await;
                         }
                     },
                 };

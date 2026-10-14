@@ -1,151 +1,65 @@
-# NexusQL - Python Client
+# NexusQL Python binding
 
-AI-Native, PostgreSQL-compatible database for Python applications.
+The PyO3 binding exposes `NexusDB` and `QueryResult`. Geometry values are returned
+as WKT strings; ordinary SQL values become Python `None`, `int`, `float`, `str`,
+`bytes`, `bool`, or lists of floats.
 
-## Installation
+## Build and test from source
 
-```bash
-pip install nexusql
+Run these commands in `bindings/python`, using a Rust toolchain and Python 3.8+
+(the build/test run for this change used Rust 1.98 and Python 3.12 on Windows):
+
+```sh
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Unix: source .venv/bin/activate
+python -m pip install maturin pytest
+maturin develop
+pytest -q
 ```
 
-## Quick Start
+`maturin develop` installs the compiled module into the active virtual environment.
+Use `maturin build --release` to produce a wheel for distribution.
+
+## Geometry and parameters
 
 ```python
 from nexusql import NexusDB
 
-# Connect to database
-db = NexusDB('./mydb')
-
-# Execute queries
-db.execute('CREATE TABLE users (id INT PRIMARY KEY, name TEXT)')
-db.execute('INSERT INTO users VALUES (1, "Alice")')
-
-result = db.query('SELECT * FROM users')
-for row in result.rows:
-    print(row['name'])
-
-# Use transactions
-with db.transaction():
-    db.execute('INSERT INTO users VALUES (2, "Bob")')
-    db.execute('UPDATE accounts SET balance = balance - 100')
-    # Auto-commits on success, rolls back on exception
-
-db.close()
+with NexusDB(":memory:") as db:
+    db.execute("CREATE TABLE devices (name TEXT, geom GEOMETRY)")
+    db.execute("CREATE INDEX devices_geom ON devices USING gist (geom)")
+    db.execute(
+        "INSERT INTO devices VALUES ($1, ST_GeomFromText($2))",
+        ("CAM-01", "POINT(3 4)"),
+    )
+    result = db.execute(
+        "SELECT name, geom FROM devices WHERE ST_DWithin(geom, ST_Point($1,$2), $3)",
+        [0, 0, 10],
+    )
+    assert result.rows == [{"name": "CAM-01", "geom": "POINT(3 4)"}]
 ```
 
-## Features
+Pass WKT directly to a GEOMETRY column or through `ST_GeomFromText`. Use `$1`,
+`$2`, etc. for positional parameters; the wrapper accepts lists or tuples.
+`ST_AsText` and Python geometry output omit SRID metadata; `ST_SRID` retrieves it.
+See [geometry functions, semantics and index behavior](../../docs/guides/geometry.md).
 
-- ✅ **PostgreSQL Compatible**: Full SQL support
-- ✅ **AI-Native**: Vector embeddings and semantic search
-- ✅ **Embedded**: No separate server needed
-- ✅ **ACID**: Full transaction support
-- ✅ **Fast**: Advanced indexing (B-Tree, HNSW, GIN, GiST, BRIN)
-- ✅ **Pythonic**: Context managers, type hints, docstrings
-- ✅ **Scalable**: Partitioning and sharding support
+## API
 
-## API Reference
+- `NexusDB(path)` / `connect(path)`: open a database directory or `:memory:`.
+- `execute(sql, params=None)` / `query(sql, params=None)`: return `QueryResult`.
+- `bulk_insert(table, columns, rows)`: insert rows directly, return the inserted
+  count; WKT coercion and spatial index maintenance still apply.
+- `bulk_load()`, `set_bulk_mode(enabled)`, `flush()`: defer and flush disk writes.
+- `close()`, `is_open()`, and database context manager: manage connection lifetime.
 
-### NexusDB
+`QueryResult.rows` is a list of dictionaries, `row_count` is its length, and
+`fields` contains the first row's column names. `rows_affected` reflects the core
+engine's result; some SQL DML paths currently return zero. `bulk_insert` returns
+the actual count.
 
-Main database class.
-
-#### Methods
-
-- `query(sql: str) -> QueryResult` - Execute SELECT query
-- `execute(sql: str) -> int` - Execute command, returns affected rows
-- `execute_many(sql: str, params_list: List[tuple]) -> int` - Bulk execute
-- `transaction()` - Context manager for transactions
-- `prepare(sql: str) -> PreparedStatement` - Create prepared statement
-- `close()` - Close connection
-
-### Example: Prepared Statements
-
-```python
-# Prepare once, execute many times
-stmt = db.prepare('SELECT * FROM users WHERE id = $1')
-
-result = stmt.execute(1)
-result = stmt.execute(2)
-result = stmt.execute(3)
-
-stmt.close()
-```
-
-### Example: Connection Pool
-
-```python
-from nexusql import ConnectionPool
-
-pool = ConnectionPool('./mydb', max_connections=20)
-
-with pool.connection() as conn:
-    result = conn.query('SELECT * FROM users')
-    # Connection automatically returned to pool
-```
-
-### Example: Bulk Operations
-
-```python
-# Insert multiple rows efficiently
-db.execute_many(
-    'INSERT INTO users VALUES ($1, $2)',
-    [(1, 'Alice'), (2, 'Bob'), (3, 'Charlie')]
-)
-```
-
-## Advanced Features
-
-### AI-Native Search
-
-```python
-# Vector similarity search
-db.execute('''
-    SELECT * FROM documents
-    WHERE embedding <-> text_to_vector('search query') < 0.5
-    ORDER BY embedding <-> text_to_vector('search query')
-    LIMIT 10
-''')
-```
-
-### Full-Text Search
-
-```python
-# Full-text search with ranking
-db.execute('''
-    SELECT *, ts_rank(document_vector, query) as rank
-    FROM articles
-    WHERE document_vector @@ to_tsquery('database & optimization')
-    ORDER BY rank DESC
-''')
-```
-
-## Installation from Source
-
-```bash
-# Clone repository
-git clone https://github.com/johnhnguyen97/NexusQL.git
-cd NexusQL/bindings/python
-
-# Install in development mode
-pip install -e .
-
-# Or build wheel
-pip install build
-python -m build
-pip install dist/nexusql-2.3.0-py3-none-any.whl
-```
-
-## Requirements
-
-- Python 3.8+
-- Rust toolchain (for building from source)
-
-## License
-
-MIT
-
-## Links
-
-- [GitHub Repository](https://github.com/johnhnguyen97/NexusQL)
-- [Documentation](https://github.com/johnhnguyen97/NexusQL#readme)
-- [Issue Tracker](https://github.com/johnhnguyen97/NexusQL/issues)
+The wrapper also provides `execute_many`, `prepare`, and `transaction` helpers.
+`prepare` currently resends SQL on each call; it does not cache a native plan.
+Transaction behavior follows the core engine. Each database owns a Tokio runtime;
+operations are synchronous and release the Python GIL while the engine executes.

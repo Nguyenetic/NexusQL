@@ -95,9 +95,9 @@ impl DefaultEngine {
 
         let mut executor = self.executor.write().await;
         let tables = executor.get_tables_mut();
-        let t = tables.get_mut(table).ok_or_else(|| {
-            crate::NexusError::QueryError(format!("Table {} not found", table))
-        })?;
+        let t = tables
+            .get_mut(table)
+            .ok_or_else(|| crate::NexusError::QueryError(format!("Table {} not found", table)))?;
 
         // Build a positional mapping once: column-index-in-input -> column-index-in-table.
         let mut col_map: Vec<Option<usize>> = Vec::with_capacity(columns.len());
@@ -120,7 +120,8 @@ impl DefaultEngine {
             // Row keeps column names alongside values in the current schema;
             // that's wasteful but a separate refactor. Reuse the slice once
             // to keep the clone cheap.
-            t.rows.push(Row::new(t.columns.clone(), row_values));
+            t.coerce_values(&mut row_values)?;
+            t.insert(Row::new(t.columns.clone(), row_values));
         }
 
         // Mark dirty so flush() writes this table
@@ -167,6 +168,7 @@ impl StorageEngine for DefaultEngine {
         if !self.is_memory {
             let touched_table = match &statement {
                 crate::query::Statement::CreateTable { name, .. }
+                | crate::query::Statement::CreateIndex { table: name, .. }
                 | crate::query::Statement::Insert { table: name, .. }
                 | crate::query::Statement::Update { table: name, .. }
                 | crate::query::Statement::Delete { from: name, .. } => Some(name.clone()),
@@ -221,7 +223,9 @@ impl StorageEngine for DefaultEngine {
         columns: &[String],
         rows: Vec<Vec<crate::types::Value>>,
     ) -> Result<Option<usize>> {
-        Ok(Some(DefaultEngine::bulk_insert(self, table, columns, rows).await?))
+        Ok(Some(
+            DefaultEngine::bulk_insert(self, table, columns, rows).await?,
+        ))
     }
 
     async fn table_columns(&self, table: &str) -> Result<Option<Vec<String>>> {

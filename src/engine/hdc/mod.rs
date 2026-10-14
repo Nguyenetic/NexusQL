@@ -11,6 +11,7 @@
 //! - [`HvOps`] — trait every variant implements.
 //! - [`HdcError`] — shared error type.
 
+pub mod classifier;
 pub mod error;
 pub mod hypervector; // backcompat shim — re-exports `Hypervector` from here
 pub mod variants;

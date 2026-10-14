@@ -117,8 +117,7 @@ impl DiskStorage {
         // Remove existing meta + all existing chunks for this table.
         batch.remove(meta_key.as_bytes());
         for item in db.scan_prefix(chunk_prefix.as_bytes()) {
-            let (key, _) =
-                item.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let (key, _) = item.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
             batch.remove(&*key);
         }
 
@@ -165,6 +164,12 @@ impl DiskStorage {
         let meta_bytes = bincode::serialize(&meta)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         batch.insert(meta_key.as_bytes(), meta_bytes);
+        let schema_bytes = bincode::serialize(&table.schema)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        batch.insert(
+            format!("table:{}:schema", table.name).as_bytes(),
+            schema_bytes,
+        );
 
         db.apply_batch(batch)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -230,15 +235,24 @@ impl DiskStorage {
             })
             .collect();
 
-        Ok(Some(Table {
+        let mut table = Table {
             name: meta.name,
+            schema: db
+                .get(format!("table:{}:schema", name))
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+                .map(|bytes| bincode::deserialize(&bytes))
+                .transpose()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+                .unwrap_or_default(),
             columns: cols,
             rows,
             indexes: HashMap::new(),
             typed_indexes: HashMap::new(),
             auto_increment_column: meta.auto_increment_column,
             next_auto_increment_id: meta.next_auto_increment_id.max(1),
-        }))
+        };
+        table.rebuild_gist_indexes();
+        Ok(Some(table))
     }
 
     pub fn list_tables(&self) -> Result<Vec<String>> {
@@ -280,6 +294,7 @@ fn estimate_row_size(values: &[Value]) -> usize {
                     Value::Text(s) => s.len(),
                     Value::Blob(b) => b.len(),
                     Value::Vector(v) => v.len() * 4,
+                    Value::Geometry(g) => g.estimated_size(),
                 }
         })
         .sum::<usize>()

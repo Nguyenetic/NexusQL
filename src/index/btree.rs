@@ -44,6 +44,7 @@ impl From<&Value> for IndexKey {
             Value::Null => IndexKey::Null,
             Value::Blob(_) => IndexKey::Null, // Blobs are not indexable, treat as NULL
             Value::Vector(_) => IndexKey::Null, // Vectors require specialized indexes (HNSW, IVF-PQ), not B-Tree
+            Value::Geometry(_) => IndexKey::Null, // Geometry uses GiST's R-tree.
         }
     }
 }

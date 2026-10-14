@@ -26,6 +26,7 @@ fn value_to_py(py: Python<'_>, v: &Value) -> PyObject {
         Value::Integer(i) => i.to_object(py),
         Value::Float(f) => f.into_inner().to_object(py),
         Value::Text(s) => s.to_object(py),
+        Value::Geometry(g) => g.as_text().to_object(py),
         Value::Blob(b) => pyo3::types::PyBytes::new_bound(py, b).into(),
         Value::Boolean(b) => b.to_object(py),
         Value::Vector(v) => v.to_object(py),
@@ -166,9 +167,9 @@ impl NexusDB {
         let sql = sql.to_string();
 
         let param_vec = if let Some(p) = params {
-            let list = p.downcast::<PyList>().map_err(|_| {
-                PyTypeError::new_err("params must be a list or None")
-            })?;
+            let list = p
+                .downcast::<PyList>()
+                .map_err(|_| PyTypeError::new_err("params must be a list or None"))?;
             let mut out = Vec::with_capacity(list.len());
             for item in list.iter() {
                 out.push(py_to_value(&item)?);
@@ -262,9 +263,7 @@ impl NexusDB {
             } else if let Some(t) = row_tuple.as_ref() {
                 t.len()
             } else {
-                return Err(PyTypeError::new_err(
-                    "each row must be a list or tuple",
-                ));
+                return Err(PyTypeError::new_err("each row must be a list or tuple"));
             };
             for i in 0..ncols {
                 if i < len {
@@ -282,9 +281,7 @@ impl NexusDB {
 
         let table = table.to_string();
         let n = py.allow_threads(move || {
-            rt.block_on(async move {
-                db.bulk_insert(&table, &columns, flat, row_count).await
-            })
+            rt.block_on(async move { db.bulk_insert(&table, &columns, flat, row_count).await })
         });
         n.map_err(rt_err)
     }

@@ -65,7 +65,9 @@ impl NexusDB {
                     Some(napi::Either::B(napi::Either::B(napi::Either::A(f)))) => {
                         NexusValue::Float(OrderedFloat(f))
                     }
-                    Some(napi::Either::B(napi::Either::B(napi::Either::B(b)))) => NexusValue::Boolean(b),
+                    Some(napi::Either::B(napi::Either::B(napi::Either::B(b)))) => {
+                        NexusValue::Boolean(b)
+                    }
                 })
                 .collect()
         } else {
@@ -568,7 +570,9 @@ impl PreparedStatement {
                 Some(napi::Either::B(napi::Either::B(napi::Either::A(f)))) => {
                     NexusValue::Float(OrderedFloat(f))
                 }
-                Some(napi::Either::B(napi::Either::B(napi::Either::B(b)))) => NexusValue::Boolean(b),
+                Some(napi::Either::B(napi::Either::B(napi::Either::B(b)))) => {
+                    NexusValue::Boolean(b)
+                }
             })
             .collect();
 
@@ -675,6 +679,7 @@ fn convert_row(row: &NexusRow) -> serde_json::Value {
                         .unwrap_or(serde_json::Value::Null)
                 }
                 NexusValue::Text(s) => serde_json::Value::String(s.clone()),
+                NexusValue::Geometry(g) => serde_json::Value::String(g.as_text()),
                 NexusValue::Blob(b) => {
                     // Convert binary data to base64
                     serde_json::Value::String(base64_encode(b))

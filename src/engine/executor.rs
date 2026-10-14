@@ -5,7 +5,10 @@ use crate::query::ast::*;
 use crate::query::evaluator::{evaluate_expr, evaluate_where, QueryParams};
 use crate::storage::Table;
 use crate::types::{ResultSet, Row, Value};
-use crate::window::{WindowManager, WindowSpec as WindowSpecImpl, WindowFrame as WindowFrameImpl, FrameBound, FrameType};
+use crate::window::{
+    FrameBound, FrameType, WindowFrame as WindowFrameImpl, WindowManager,
+    WindowSpec as WindowSpecImpl,
+};
 use crate::Result;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
@@ -57,12 +60,8 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
         (Value::Text(a), Value::Text(b)) => Some(a.cmp(b)),
         // Cross-type comparisons for SQL compatibility
-        (Value::Integer(i), Value::Float(f)) => {
-            OrderedFloat(*i as f64).partial_cmp(f)
-        }
-        (Value::Float(f), Value::Integer(i)) => {
-            f.partial_cmp(&OrderedFloat(*i as f64))
-        }
+        (Value::Integer(i), Value::Float(f)) => OrderedFloat(*i as f64).partial_cmp(f),
+        (Value::Float(f), Value::Integer(i)) => f.partial_cmp(&OrderedFloat(*i as f64)),
         _ => None,
     }
 }
@@ -227,6 +226,10 @@ impl Executor {
 
                 let col_names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 let mut table = Table::new(name.to_string(), col_names);
+                table.schema.column_types = columns
+                    .iter()
+                    .map(|c| (c.name.clone(), c.data_type.clone()))
+                    .collect();
 
                 // Set AUTO_INCREMENT column if specified
                 for col in columns {
@@ -333,16 +336,36 @@ impl Executor {
 
                                 tracing::info!(
                                     "Created GIN index '{}' on {}.{}",
-                                    index_name, table, first_col
+                                    index_name,
+                                    table,
+                                    first_col
                                 );
                             }
                             "gist" => {
                                 // Create GiST index for geometric/spatial data
-                                let gist_index = crate::index::GiSTIndex::new(
+                                let index_type = if t.schema.column_types.get(first_col)
+                                    == Some(&DataType::Geometry)
+                                {
+                                    crate::index::GiSTIndexType::RTree
+                                } else {
+                                    crate::index::GiSTIndexType::RangeTree
+                                };
+                                let mut gist_index = crate::index::GiSTIndex::new(
                                     index_name.clone(),
                                     first_col.clone(),
-                                    crate::index::GiSTIndexType::RangeTree,
+                                    index_type,
                                 );
+                                for (id, row) in t.rows.iter().enumerate() {
+                                    if let Some(value) = row.values.get(col_idx) {
+                                        gist_index.insert(id, value);
+                                    }
+                                }
+                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
+                                    name: index_name.clone(),
+                                    column: first_col.clone(),
+                                    index_type,
+                                });
 
                                 t.typed_indexes.insert(
                                     index_name.clone(),
@@ -351,7 +374,9 @@ impl Executor {
 
                                 tracing::info!(
                                     "Created GiST index '{}' on {}.{}",
-                                    index_name, table, first_col
+                                    index_name,
+                                    table,
+                                    first_col
                                 );
                             }
                             "brin" => {
@@ -380,13 +405,18 @@ impl Executor {
 
                                 tracing::info!(
                                     "Created BRIN index '{}' on {}.{} (pages_per_range={})",
-                                    index_name, table, first_col, pages_per_range
+                                    index_name,
+                                    table,
+                                    first_col,
+                                    pages_per_range
                                 );
                             }
                             "btree" | _ => {
                                 // Default: Create B-Tree index
-                                let mut index =
-                                    crate::index::btree::BTreeIndex::new(first_col.clone(), col_idx);
+                                let mut index = crate::index::btree::BTreeIndex::new(
+                                    first_col.clone(),
+                                    col_idx,
+                                );
 
                                 // Build index from existing rows
                                 for (row_id, row) in t.rows.iter().enumerate() {
@@ -398,7 +428,9 @@ impl Executor {
 
                                 tracing::info!(
                                     "Created B-Tree index '{}' on {}.{}",
-                                    index_name, table, first_col
+                                    index_name,
+                                    table,
+                                    first_col
                                 );
                             }
                         }
@@ -436,8 +468,7 @@ impl Executor {
                     // Find primary key column index for conflict detection
                     let pk_col_idx = t.columns.iter().position(|c| {
                         // For now, assume first column named "id" or marked as auto_increment is PK
-                        c.to_lowercase() == "id"
-                            || t.auto_increment_column.as_ref() == Some(c)
+                        c.to_lowercase() == "id" || t.auto_increment_column.as_ref() == Some(c)
                     });
 
                     for expr_set in values {
@@ -479,6 +510,8 @@ impl Executor {
                                 (t.columns.clone(), evaluated_values)
                             };
 
+                        t.coerce_values(&mut insert_values)?;
+
                         // AUTO_INCREMENT: Generate ID if the column is NULL
                         if let Some(ref auto_col) = t.auto_increment_column {
                             if let Some(auto_col_idx) = t.columns.iter().position(|c| c == auto_col)
@@ -503,6 +536,7 @@ impl Executor {
                                     t.rows.retain(|existing| {
                                         existing.values.get(pk_idx) != Some(pk_value)
                                     });
+                                    t.rebuild_gist_indexes();
                                 }
                                 t.insert(row);
                             }
@@ -595,11 +629,45 @@ impl Executor {
                 let cte_cleanup = self.execute_ctes(with, params)?;
 
                 // Get primary table (may be a CTE)
-                let table = self.tables.get(&from.table).ok_or_else(|| {
-                    crate::NexusError::QueryError(format!("Table {} not found", from.table))
-                })?;
+                let scalar_table = Table::new(String::new(), vec![]);
+                let table = if from.table.is_empty() {
+                    &scalar_table
+                } else {
+                    self.tables.get(&from.table).ok_or_else(|| {
+                        crate::NexusError::QueryError(format!("Table {} not found", from.table))
+                    })?
+                };
 
-                let mut rows = table.select_all();
+                let mut rows = if from.table.is_empty() {
+                    vec![Row::new(vec![], vec![])]
+                } else if from.joins.is_empty() {
+                    let outer = Row::new(vec![], vec![]);
+                    if let Some(ids) = where_clause.as_ref().and_then(|expr| {
+                        super::spatial::candidates(
+                            table,
+                            from.alias.as_deref().unwrap_or(&from.table),
+                            expr,
+                            &outer,
+                            params,
+                        )
+                    }) {
+                        ids.into_iter()
+                            .filter_map(|id| table.rows.get(id).cloned())
+                            .collect()
+                    } else {
+                        table.select_all()
+                    }
+                } else {
+                    table.select_all()
+                };
+
+                if from.alias.is_some() || !from.joins.is_empty() {
+                    let qualifier = from.alias.as_deref().unwrap_or(&from.table);
+                    rows = rows
+                        .iter()
+                        .map(|row| super::spatial::qualify(row, qualifier))
+                        .collect();
+                }
 
                 // Execute JOINs if present
                 if !from.joins.is_empty() {
@@ -628,7 +696,8 @@ impl Executor {
                 // Handle GROUP BY
                 if !group_by.is_empty() {
                     // Group rows and apply aggregations
-                    let grouped_rows = self.execute_group_by(&rows, columns, group_by, having, params)?;
+                    let grouped_rows =
+                        self.execute_group_by(&rows, columns, group_by, having, params)?;
 
                     // Apply ORDER BY sorting on grouped results
                     let mut result_rows = grouped_rows;
@@ -670,21 +739,31 @@ impl Executor {
 
                 // Apply ORDER BY sorting (especially for vector distance)
                 if let Some(order) = order_by {
-                    rows.sort_by(|a, b| {
-                        use crate::query::evaluator::evaluate_expr;
-                        let a_val = evaluate_expr(a, &order.expr, params);
-                        let b_val = evaluate_expr(b, &order.expr, params);
-
-                        let cmp = a_val
-                            .partial_cmp(&b_val)
-                            .unwrap_or(std::cmp::Ordering::Equal);
-
-                        if order.ascending {
-                            cmp
-                        } else {
-                            cmp.reverse()
-                        }
-                    });
+                    // SELECT aliases refer to their expressions when sorting
+                    // source rows (projection happens after ORDER BY / LIMIT).
+                    let order_expr = if let Expr::Column(name) = &order.expr {
+                        columns
+                            .iter()
+                            .find_map(|item| match item {
+                                SelectItem::Expr {
+                                    expr,
+                                    alias: Some(alias),
+                                } if alias == name => Some(expr),
+                                _ => None,
+                            })
+                            .unwrap_or(&order.expr)
+                    } else {
+                        &order.expr
+                    };
+                    // Expensive scalar scores/distances need evaluation once
+                    // per row, not once per comparison during sorting.
+                    if order.ascending {
+                        rows.sort_by_cached_key(|row| evaluate_expr(row, order_expr, params));
+                    } else {
+                        rows.sort_by_cached_key(|row| {
+                            std::cmp::Reverse(evaluate_expr(row, order_expr, params))
+                        });
+                    }
                 }
 
                 // Apply LIMIT
@@ -715,7 +794,9 @@ impl Executor {
                 where_clause,
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
-                    for row in &mut t.rows {
+                    // Validate the whole statement before replacing rows or index bounds.
+                    let mut updated = t.rows.clone();
+                    for row in &mut updated {
                         let should_update = where_clause
                             .as_ref()
                             .map(|expr| evaluate_where(row, expr, params))
@@ -725,11 +806,19 @@ impl Executor {
                             for (col_name, new_expr) in set {
                                 if let Some(idx) = row.columns.iter().position(|c| c == col_name) {
                                     // Evaluate the expression with parameters
-                                    row.values[idx] = evaluate_expr(row, new_expr, params);
+                                    let mut value = evaluate_expr(row, new_expr, params);
+                                    if t.schema.column_types.get(col_name)
+                                        == Some(&DataType::Geometry)
+                                    {
+                                        Table::coerce_geometry(&mut value)?;
+                                    }
+                                    row.values[idx] = value;
                                 }
                             }
                         }
                     }
+                    t.rows = updated;
+                    t.rebuild_gist_indexes();
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(
@@ -745,6 +834,7 @@ impl Executor {
                     } else {
                         t.rows.clear();
                     }
+                    t.rebuild_gist_indexes();
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(
@@ -1019,7 +1109,14 @@ impl Executor {
                 limit,
             } => {
                 // Execute graph traversal
-                self.execute_traverse(clause, from_table, where_clause, return_columns, limit, params)
+                self.execute_traverse(
+                    clause,
+                    from_table,
+                    where_clause,
+                    return_columns,
+                    limit,
+                    params,
+                )
             }
         }
     }
@@ -1110,7 +1207,11 @@ impl Executor {
                 match item {
                     SelectItem::Wildcard => {
                         // Add all columns from the original row
-                        result_cols.extend(row.columns.clone());
+                        result_cols.extend(
+                            row.columns
+                                .iter()
+                                .map(|c| c.rsplit('.').next().unwrap_or(c).to_string()),
+                        );
                         result_vals.extend(row.values.clone());
                     }
                     SelectItem::Expr { expr, alias } => {
@@ -1224,12 +1325,17 @@ impl Executor {
 
         for item in select_items {
             if let SelectItem::Expr { expr, .. } = item {
-                if let Expr::WindowFunction { function, window_spec } = expr {
+                if let Expr::WindowFunction {
+                    function,
+                    window_spec,
+                } = expr
+                {
                     // Convert AST WindowSpec to window module WindowSpec
                     let impl_spec = self.convert_window_spec(window_spec, rows);
 
                     // Get function name and value column
-                    let (func_name, value_col_idx) = self.extract_window_function_info(function, rows);
+                    let (func_name, value_col_idx) =
+                        self.extract_window_function_info(function, rows);
 
                     // For RANK and DENSE_RANK, use ORDER BY column as value_column if not set
                     let effective_value_col = if value_col_idx.is_none()
@@ -1285,7 +1391,9 @@ impl Executor {
                     WindowFrameUnits::Groups => FrameType::Rows, // Treat GROUPS as ROWS for now
                 },
                 self.convert_frame_bound(&ast_frame.start),
-                ast_frame.end.as_ref()
+                ast_frame
+                    .end
+                    .as_ref()
                     .map(|e| self.convert_frame_bound(e))
                     .unwrap_or(FrameBound::CurrentRow),
             )
@@ -1312,7 +1420,11 @@ impl Executor {
     }
 
     /// Extract function name and value column index from window function
-    fn extract_window_function_info(&self, function: &Expr, rows: &[Row]) -> (String, Option<usize>) {
+    fn extract_window_function_info(
+        &self,
+        function: &Expr,
+        rows: &[Row],
+    ) -> (String, Option<usize>) {
         match function {
             Expr::Function { name, args } => {
                 let func_name = name.to_uppercase();
@@ -1467,7 +1579,11 @@ impl Executor {
         params: &QueryParams,
     ) -> Result<bool> {
         match expr {
-            Expr::InSubquery { expr: value_expr, subquery, negated } => {
+            Expr::InSubquery {
+                expr: value_expr,
+                subquery,
+                negated,
+            } => {
                 // Execute the subquery to get the set of values
                 let subquery_rows = self.execute_subquery_expr(subquery, params)?;
 
@@ -1549,7 +1665,11 @@ impl Executor {
                 Ok(Value::Null)
             }
 
-            Expr::InSubquery { expr: value_expr, subquery, negated } => {
+            Expr::InSubquery {
+                expr: value_expr,
+                subquery,
+                negated,
+            } => {
                 // Evaluate as boolean
                 let subquery_rows = self.execute_subquery_expr(subquery, params)?;
                 let value = evaluate_expr(row, value_expr, params);
@@ -1648,26 +1768,18 @@ impl Executor {
         match op {
             BinaryOperator::Eq => left == right,
             BinaryOperator::NotEq => left != right,
-            BinaryOperator::Lt => {
-                compare_values(left, right)
-                    .map(|c| c == std::cmp::Ordering::Less)
-                    .unwrap_or(false)
-            }
-            BinaryOperator::LtEq => {
-                compare_values(left, right)
-                    .map(|c| c != std::cmp::Ordering::Greater)
-                    .unwrap_or(false)
-            }
-            BinaryOperator::Gt => {
-                compare_values(left, right)
-                    .map(|c| c == std::cmp::Ordering::Greater)
-                    .unwrap_or(false)
-            }
-            BinaryOperator::GtEq => {
-                compare_values(left, right)
-                    .map(|c| c != std::cmp::Ordering::Less)
-                    .unwrap_or(false)
-            }
+            BinaryOperator::Lt => compare_values(left, right)
+                .map(|c| c == std::cmp::Ordering::Less)
+                .unwrap_or(false),
+            BinaryOperator::LtEq => compare_values(left, right)
+                .map(|c| c != std::cmp::Ordering::Greater)
+                .unwrap_or(false),
+            BinaryOperator::Gt => compare_values(left, right)
+                .map(|c| c == std::cmp::Ordering::Greater)
+                .unwrap_or(false),
+            BinaryOperator::GtEq => compare_values(left, right)
+                .map(|c| c != std::cmp::Ordering::Less)
+                .unwrap_or(false),
             _ => false,
         }
     }
@@ -1712,7 +1824,43 @@ impl Executor {
         let right_table = self.tables.get(&join.table).ok_or_else(|| {
             crate::NexusError::QueryError(format!("Table {} not found for JOIN", join.table))
         })?;
-        let right_rows = right_table.select_all();
+        let qualifier = join.alias.as_deref().unwrap_or(&join.table);
+        let right_rows: Vec<_> = right_table
+            .rows
+            .iter()
+            .map(|row| super::spatial::qualify(row, qualifier))
+            .collect();
+
+        // Parameterized index nested loop. Each outer row supplies the geometry
+        // for one R-tree probe; every candidate still goes through the exact ON.
+        if matches!(join.join_type, JoinType::Inner | JoinType::Left) {
+            let mut result = Vec::new();
+            for left in left_rows {
+                let ids = join.on_condition.as_ref().and_then(|expr| {
+                    super::spatial::candidates(right_table, qualifier, expr, left, params)
+                });
+                let rows: Box<dyn Iterator<Item = &Row> + '_> = if let Some(ids) = ids {
+                    Box::new(ids.into_iter().filter_map(|id| right_rows.get(id)))
+                } else {
+                    Box::new(right_rows.iter())
+                };
+                let mut matched = false;
+                for right in rows {
+                    if self.evaluate_join_condition(left, right, &join.on_condition, params) {
+                        result.push(self.merge_rows(left, right, &None));
+                        matched = true;
+                    }
+                }
+                if !matched && join.join_type == JoinType::Left {
+                    result.push(self.merge_rows_with_nulls(
+                        left,
+                        right_table,
+                        &Some(qualifier.to_string()),
+                    ));
+                }
+            }
+            return Ok(result);
+        }
 
         let mut result = Vec::new();
 
@@ -1721,7 +1869,12 @@ impl Executor {
                 // INNER JOIN: only matching rows
                 for left_row in left_rows {
                     for right_row in &right_rows {
-                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                        if self.evaluate_join_condition(
+                            left_row,
+                            right_row,
+                            &join.on_condition,
+                            params,
+                        ) {
                             result.push(self.merge_rows(left_row, right_row, &join.alias));
                         }
                     }
@@ -1732,7 +1885,12 @@ impl Executor {
                 for left_row in left_rows {
                     let mut matched = false;
                     for right_row in &right_rows {
-                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                        if self.evaluate_join_condition(
+                            left_row,
+                            right_row,
+                            &join.on_condition,
+                            params,
+                        ) {
                             result.push(self.merge_rows(left_row, right_row, &join.alias));
                             matched = true;
                         }
@@ -1748,7 +1906,12 @@ impl Executor {
                 for right_row in &right_rows {
                     let mut matched = false;
                     for left_row in left_rows {
-                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                        if self.evaluate_join_condition(
+                            left_row,
+                            right_row,
+                            &join.on_condition,
+                            params,
+                        ) {
                             result.push(self.merge_rows(left_row, right_row, &join.alias));
                             matched = true;
                         }
@@ -1757,7 +1920,11 @@ impl Executor {
                         // Add right row with NULL values for left table columns
                         // For right join, we need the left columns as NULL
                         if let Some(first_left) = left_rows.first() {
-                            result.push(self.merge_rows_left_nulls(first_left, right_row, &join.alias));
+                            result.push(self.merge_rows_left_nulls(
+                                first_left,
+                                right_row,
+                                &join.alias,
+                            ));
                         }
                     }
                 }
@@ -1769,7 +1936,12 @@ impl Executor {
                 for left_row in left_rows {
                     let mut matched = false;
                     for (right_idx, right_row) in right_rows.iter().enumerate() {
-                        if self.evaluate_join_condition(left_row, right_row, &join.on_condition, params) {
+                        if self.evaluate_join_condition(
+                            left_row,
+                            right_row,
+                            &join.on_condition,
+                            params,
+                        ) {
                             result.push(self.merge_rows(left_row, right_row, &join.alias));
                             matched = true;
                             matched_right_indices.insert(right_idx);
@@ -1784,7 +1956,11 @@ impl Executor {
                 if let Some(first_left) = left_rows.first() {
                     for (right_idx, right_row) in right_rows.iter().enumerate() {
                         if !matched_right_indices.contains(&right_idx) {
-                            result.push(self.merge_rows_left_nulls(first_left, right_row, &join.alias));
+                            result.push(self.merge_rows_left_nulls(
+                                first_left,
+                                right_row,
+                                &join.alias,
+                            ));
                         }
                     }
                 }
@@ -1827,7 +2003,9 @@ impl Executor {
 
         // Add right table columns with optional alias prefix
         for (i, col) in right.columns.iter().enumerate() {
-            let col_name = if let Some(alias) = right_alias {
+            let col_name = if col.contains('.') {
+                col.clone()
+            } else if let Some(alias) = right_alias {
                 format!("{}.{}", alias, col)
             } else {
                 // Prefix with table name to avoid conflicts
@@ -1841,7 +2019,12 @@ impl Executor {
     }
 
     /// Merge left row with NULL values for right table columns (for LEFT JOIN)
-    fn merge_rows_with_nulls(&self, left: &Row, right_table: &Table, right_alias: &Option<String>) -> Row {
+    fn merge_rows_with_nulls(
+        &self,
+        left: &Row,
+        right_table: &Table,
+        right_alias: &Option<String>,
+    ) -> Row {
         let mut columns = left.columns.clone();
         let mut values = left.values.clone();
 
@@ -1860,7 +2043,12 @@ impl Executor {
     }
 
     /// Merge right row with NULL values for left table columns (for RIGHT JOIN)
-    fn merge_rows_left_nulls(&self, left_template: &Row, right: &Row, right_alias: &Option<String>) -> Row {
+    fn merge_rows_left_nulls(
+        &self,
+        left_template: &Row,
+        right: &Row,
+        right_alias: &Option<String>,
+    ) -> Row {
         let mut columns = Vec::new();
         let mut values = Vec::new();
 
@@ -1872,7 +2060,9 @@ impl Executor {
 
         // Add right table columns with actual values
         for (i, col) in right.columns.iter().enumerate() {
-            let col_name = if let Some(alias) = right_alias {
+            let col_name = if col.contains('.') {
+                col.clone()
+            } else if let Some(alias) = right_alias {
                 format!("{}.{}", alias, col)
             } else {
                 col.clone()
@@ -1924,7 +2114,8 @@ impl Executor {
             }
 
             // Evaluate aggregates and columns for this group
-            let result_row = self.evaluate_group_row(&group_rows, columns, group_by, &group_key, params)?;
+            let result_row =
+                self.evaluate_group_row(&group_rows, columns, group_by, &group_key, params)?;
 
             result_rows.push(result_row);
         }
@@ -1965,33 +2156,29 @@ impl Executor {
                 let right_val = self.evaluate_having_value(right, group_rows, params)?;
 
                 let result = match op {
-                    BinaryOperator::Gt => {
-                        compare_values(&left_val, &right_val)
-                            .map(|c| c == std::cmp::Ordering::Greater)
-                            .unwrap_or(false)
-                    }
-                    BinaryOperator::GtEq => {
-                        compare_values(&left_val, &right_val)
-                            .map(|c| c != std::cmp::Ordering::Less)
-                            .unwrap_or(false)
-                    }
-                    BinaryOperator::Lt => {
-                        compare_values(&left_val, &right_val)
-                            .map(|c| c == std::cmp::Ordering::Less)
-                            .unwrap_or(false)
-                    }
-                    BinaryOperator::LtEq => {
-                        compare_values(&left_val, &right_val)
-                            .map(|c| c != std::cmp::Ordering::Greater)
-                            .unwrap_or(false)
-                    }
+                    BinaryOperator::Gt => compare_values(&left_val, &right_val)
+                        .map(|c| c == std::cmp::Ordering::Greater)
+                        .unwrap_or(false),
+                    BinaryOperator::GtEq => compare_values(&left_val, &right_val)
+                        .map(|c| c != std::cmp::Ordering::Less)
+                        .unwrap_or(false),
+                    BinaryOperator::Lt => compare_values(&left_val, &right_val)
+                        .map(|c| c == std::cmp::Ordering::Less)
+                        .unwrap_or(false),
+                    BinaryOperator::LtEq => compare_values(&left_val, &right_val)
+                        .map(|c| c != std::cmp::Ordering::Greater)
+                        .unwrap_or(false),
                     BinaryOperator::Eq => left_val == right_val,
                     BinaryOperator::NotEq => left_val != right_val,
                     BinaryOperator::And => {
-                        matches!((&left_val, &right_val), (Value::Boolean(true), Value::Boolean(true)))
+                        matches!(
+                            (&left_val, &right_val),
+                            (Value::Boolean(true), Value::Boolean(true))
+                        )
                     }
                     BinaryOperator::Or => {
-                        matches!(&left_val, Value::Boolean(true)) || matches!(&right_val, Value::Boolean(true))
+                        matches!(&left_val, Value::Boolean(true))
+                            || matches!(&right_val, Value::Boolean(true))
                     }
                     _ => false,
                 };
@@ -2033,9 +2220,9 @@ impl Executor {
         let mut result_values = Vec::new();
 
         // Use the first row as a reference for non-aggregate columns
-        let first_row = group_rows.first().ok_or_else(|| {
-            crate::NexusError::QueryError("Empty group in GROUP BY".to_string())
-        })?;
+        let first_row = group_rows
+            .first()
+            .ok_or_else(|| crate::NexusError::QueryError("Empty group in GROUP BY".to_string()))?;
 
         for item in columns {
             match item {
@@ -2163,7 +2350,9 @@ impl Executor {
                 }
 
                 if count > 0 {
-                    Ok(Value::Float(ordered_float::OrderedFloat(sum / count as f64)))
+                    Ok(Value::Float(ordered_float::OrderedFloat(
+                        sum / count as f64,
+                    )))
                 } else {
                     Ok(Value::Null)
                 }
@@ -2184,7 +2373,11 @@ impl Executor {
                     min = Some(match &min {
                         None => val,
                         Some(current) => {
-                            if val < *current { val } else { current.clone() }
+                            if val < *current {
+                                val
+                            } else {
+                                current.clone()
+                            }
                         }
                     });
                 }
@@ -2206,7 +2399,11 @@ impl Executor {
                     max = Some(match &max {
                         None => val,
                         Some(current) => {
-                            if val > *current { val } else { current.clone() }
+                            if val > *current {
+                                val
+                            } else {
+                                current.clone()
+                            }
                         }
                     });
                 }
@@ -2215,13 +2412,17 @@ impl Executor {
             _ => {
                 // Unknown aggregate, evaluate on first row
                 use crate::query::evaluator::evaluate_expr;
-                let first_row = group_rows.first().ok_or_else(|| {
-                    crate::NexusError::QueryError("Empty group".to_string())
-                })?;
-                Ok(evaluate_expr(first_row, &Expr::Function {
-                    name: func_name.to_string(),
-                    args: args.to_vec(),
-                }, params))
+                let first_row = group_rows
+                    .first()
+                    .ok_or_else(|| crate::NexusError::QueryError("Empty group".to_string()))?;
+                Ok(evaluate_expr(
+                    first_row,
+                    &Expr::Function {
+                        name: func_name.to_string(),
+                        args: args.to_vec(),
+                    },
+                    params,
+                ))
             }
         }
     }
@@ -2243,8 +2444,7 @@ impl Executor {
 
             for fetch in fetch_clauses {
                 // Look up the relationship (either by name or treat as direct table reference)
-                let related_data =
-                    self.fetch_related_data(orig_row, fetch, params)?;
+                let related_data = self.fetch_related_data(orig_row, fetch, params)?;
 
                 // Add the fetched data as a new column (JSON-serialized)
                 let fetch_col_name = format!("_{}", fetch.relationship);
@@ -2366,7 +2566,12 @@ impl Executor {
 
         // Handle nested FETCH clauses
         let final_rows = if !fetch.nested_fetch.is_empty() {
-            self.execute_fetch_clauses(&projected_rows, &matching_rows, &fetch.nested_fetch, params)?
+            self.execute_fetch_clauses(
+                &projected_rows,
+                &matching_rows,
+                &fetch.nested_fetch,
+                params,
+            )?
         } else {
             projected_rows
         };
@@ -2400,6 +2605,7 @@ impl Executor {
                                     .collect::<Vec<_>>()
                                     .join(",")
                             ),
+                            Value::Geometry(g) => serde_json::to_string(&g.as_text()).unwrap(),
                         };
                         format!("\"{}\":{}", col, json_val)
                     })
@@ -2491,8 +2697,7 @@ impl Executor {
         use std::collections::VecDeque;
 
         let mut results = Vec::new();
-        let mut visited: std::collections::HashSet<Vec<Value>> =
-            std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<Vec<Value>> = std::collections::HashSet::new();
         let mut queue: VecDeque<(Row, usize)> = VecDeque::new();
 
         let rel = self.relationships.get(&clause.pattern.relationship_type);
@@ -2529,8 +2734,7 @@ impl Executor {
         params: &QueryParams,
     ) -> Result<Vec<Row>> {
         let mut results = Vec::new();
-        let mut visited: std::collections::HashSet<Vec<Value>> =
-            std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<Vec<Value>> = std::collections::HashSet::new();
 
         let rel = self.relationships.get(&clause.pattern.relationship_type);
 
@@ -2703,22 +2907,34 @@ impl Executor {
     ) -> Result<Vec<Row>> {
         let (target_table_name, source_col, target_col) = if let Some(r) = rel {
             match clause.pattern.direction {
-                TraverseDirection::Outgoing => {
-                    (r.to_table.clone(), r.from_column.clone(), r.to_column.clone())
-                }
-                TraverseDirection::Incoming => {
-                    (r.from_table.clone(), r.to_column.clone(), r.from_column.clone())
-                }
+                TraverseDirection::Outgoing => (
+                    r.to_table.clone(),
+                    r.from_column.clone(),
+                    r.to_column.clone(),
+                ),
+                TraverseDirection::Incoming => (
+                    r.from_table.clone(),
+                    r.to_column.clone(),
+                    r.from_column.clone(),
+                ),
                 TraverseDirection::Both => {
                     // For bidirectional, we'd need to check both directions
                     // For now, default to outgoing
-                    (r.to_table.clone(), r.from_column.clone(), r.to_column.clone())
+                    (
+                        r.to_table.clone(),
+                        r.from_column.clone(),
+                        r.to_column.clone(),
+                    )
                 }
             }
         } else {
             // Use convention: relationship_type is the target table
             let table_name = clause.pattern.relationship_type.clone();
-            ("".to_string(), "id".to_string(), format!("{}_id", table_name))
+            (
+                "".to_string(),
+                "id".to_string(),
+                format!("{}_id", table_name),
+            )
         };
 
         // If no relationship defined and no table found, return empty
