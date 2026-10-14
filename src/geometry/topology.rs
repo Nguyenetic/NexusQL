@@ -170,7 +170,14 @@ impl Parts {
 }
 
 fn coord_cmp(a: Coord<f64>, b: Coord<f64>) -> Ordering {
-    a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
+    // Sorting and deduplication must agree that -0.0 and +0.0 are equal.
+    if a == b {
+        Ordering::Equal
+    } else if a.x == b.x {
+        a.y.total_cmp(&b.y)
+    } else {
+        a.x.total_cmp(&b.x)
+    }
 }
 
 fn intersection_points(a: Line<f64>, b: Line<f64>) -> Vec<Coord<f64>> {
@@ -218,7 +225,6 @@ fn assemble(
     mut points: Vec<Point<f64>>,
     empty: Geometry<f64>,
 ) -> Geometry<f64> {
-    points.retain(|p| !polygons.intersects(p) && !lines.iter().any(|l| l.intersects(p)));
     points.sort_by(|a, b| coord_cmp(a.0, b.0));
     points.dedup();
     let mut geometries = Vec::new();
@@ -260,6 +266,9 @@ pub(super) fn union(a: &Geometry<f64>, b: &Geometry<f64>) -> Option<Geometry<f64
         .collect();
     let polygons = geo::algorithm::unary_union(&oriented);
     let lines = node(&parts.lines, &polygons);
+    parts
+        .points
+        .retain(|p| !polygons.intersects(p) && !lines.iter().any(|l| l.intersects(p)));
     let empty = if !parts.polygons.is_empty() {
         Polygon::empty().into()
     } else if matches!(a, Geometry::LineString(_) | Geometry::MultiLineString(_))
@@ -274,6 +283,84 @@ pub(super) fn union(a: &Geometry<f64>, b: &Geometry<f64>) -> Option<Geometry<f64
     Some(assemble(polygons, lines, parts.points, empty))
 }
 
+// Walk the unbounded face of each component of a noded planar graph. At every
+// vertex, the clockwise successor of the incoming edge keeps the face on the
+// left. Bounded faces are counterclockwise; unbounded faces are clockwise.
+// Bridges occur twice in a face walk and must remain as linework.
+fn outer_faces(lines: &[Line<f64>]) -> (MultiPolygon<f64>, Vec<bool>) {
+    let mut vertices: Vec<_> = lines.iter().flat_map(|l| [l.start, l.end]).collect();
+    vertices.sort_by(|a, b| coord_cmp(*a, *b));
+    vertices.dedup();
+    let mut from = Vec::with_capacity(lines.len() * 2);
+    let mut to = Vec::with_capacity(lines.len() * 2);
+    let mut outgoing = vec![Vec::new(); vertices.len()];
+    for (i, line) in lines.iter().enumerate() {
+        let a = vertices
+            .binary_search_by(|v| coord_cmp(*v, line.start))
+            .expect("endpoint exists");
+        let b = vertices
+            .binary_search_by(|v| coord_cmp(*v, line.end))
+            .expect("endpoint exists");
+        from.extend([a, b]);
+        to.extend([b, a]);
+        outgoing[a].push(2 * i);
+        outgoing[b].push(2 * i + 1);
+    }
+    for (vertex, edges) in outgoing.iter_mut().enumerate() {
+        let origin = vertices[vertex];
+        edges.sort_by(|a, b| {
+            let a = vertices[to[*a]] - origin;
+            let b = vertices[to[*b]] - origin;
+            a.y.atan2(a.x).total_cmp(&b.y.atan2(b.x))
+        });
+    }
+    let mut successor = vec![0; from.len()];
+    for edges in &outgoing {
+        for (i, edge) in edges.iter().enumerate() {
+            successor[*edge ^ 1] = edges[(i + edges.len() - 1) % edges.len()];
+        }
+    }
+    let mut visited = vec![false; from.len()];
+    let mut consumed = vec![false; lines.len()];
+    let mut area = MultiPolygon::empty();
+    for start in 0..from.len() {
+        if visited[start] {
+            continue;
+        }
+        let (mut coordinates, mut walk) = (Vec::new(), Vec::new());
+        let mut edge = start;
+        while !visited[edge] {
+            visited[edge] = true;
+            coordinates.push(vertices[from[edge]]);
+            walk.push(edge / 2);
+            edge = successor[edge];
+        }
+        coordinates.push(coordinates[0]);
+        let ring = Polygon::new(LineString::new(coordinates), vec![]);
+        if ring.signed_area() >= 0.0 {
+            continue;
+        }
+        let face = ring.union(&Polygon::empty());
+        if face.0.is_empty() {
+            continue;
+        }
+        area = area.xor(&face);
+        walk.sort_unstable();
+        let mut i = 0;
+        while i < walk.len() {
+            let mut end = i + 1;
+            while end < walk.len() && walk[end] == walk[i] {
+                end += 1;
+            }
+            if end - i == 1 {
+                consumed[walk[i]] = true;
+            }
+            i = end;
+        }
+    }
+    (area, consumed)
+}
+
 pub(super) fn make_valid(g: &Geometry<f64>) -> Option<Geometry<f64>> {
     if is_valid(g) {
         return Some(g.clone());
@@ -285,14 +372,29 @@ pub(super) fn make_valid(g: &Geometry<f64>) -> Option<Geometry<f64>> {
     }
     let mut parts = Parts::default();
     parts.collect(g);
-    // Even-odd polygonization of all original rings also promotes holes outside
-    // the shell, splits bowties, and resolves overlapping MultiPolygon members.
-    let polygons = MultiPolygon(parts.polygons.clone()).union(&MultiPolygon::empty());
-    // Keep collapsed polygon edges and isolated vertices, rather than losing
-    // them through a buffer(0). The result may have a lower dimension.
-    let boundaries = parts.boundary_lines();
+    // Deduplicate linework before polygonizing: duplicate shells/holes must not
+    // cancel each other. Peel complete boundaries, toggling nested areas, until
+    // only cut edges and collapsed components remain (GEOS linework semantics).
+    let mut lines = node(&parts.boundary_lines(), &MultiPolygon::empty());
     parts.points.extend(g.coords_iter().map(Point));
-    let lines = node(&boundaries, &polygons);
+    parts
+        .points
+        .retain(|p| !lines.iter().any(|l| l.intersects(p)));
+    let mut polygons = MultiPolygon::empty();
+    loop {
+        let (area, consumed) = outer_faces(&lines);
+        if !consumed.iter().any(|v| *v) {
+            break;
+        }
+        polygons = polygons.xor(&area);
+        lines = lines
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, line)| (!consumed[i]).then_some(line))
+            .collect();
+    }
+    // Preserve leftover cut lines even inside polygons. Union removes covered
+    // components, but MakeValid must retain the original collapsed linework.
     let result = assemble(
         polygons,
         lines,

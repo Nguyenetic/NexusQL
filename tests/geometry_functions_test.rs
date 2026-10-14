@@ -869,3 +869,204 @@ fn new_functions_propagate_nulls_bad_arity_and_srid_mismatches() {
         Value::Null
     );
 }
+
+#[test]
+fn geographic_distances_measure_arc_interiors_and_antimeridian_crossings() {
+    let mut ex = Executor::new();
+    for (line, point) in [
+        ("LINESTRING(-1 0,1 0)", "POINT(0 1)"),
+        ("LINESTRING(179 0,-179 0)", "POINT(180 1)"),
+        ("MULTILINESTRING EMPTY", "POINT(0 1)"),
+    ] {
+        if line.ends_with("EMPTY") {
+            assert_eq!(
+                scalar(&mut ex, &format!("ST_DistanceSpheroid('{line}','{point}')")),
+                Value::Null
+            );
+            continue;
+        }
+        for (function, expected) in [
+            ("ST_DistanceSphere", 111195.07973463158),
+            ("ST_DistanceSpheroid", 110574.38855779878),
+        ] {
+            near(
+                number(scalar(&mut ex, &format!("{function}('{line}','{point}')"))),
+                expected,
+                0.00001,
+            );
+            near(
+                number(scalar(&mut ex, &format!("{function}('{point}','{line}')"))),
+                expected,
+                0.00001,
+            );
+        }
+    }
+    for (a, b) in [
+        ("LINESTRING(-1 0,1 0)", "LINESTRING(0 -1,0 1)"),
+        ("LINESTRING(179 0,-179 0)", "LINESTRING(180 -1,180 1)"),
+        ("LINESTRING(0 0,2 0)", "LINESTRING(1 0,3 0)"),
+    ] {
+        assert_eq!(
+            scalar(&mut ex, &format!("ST_DistanceSpheroid('{a}','{b}')")),
+            Value::from(0.0)
+        );
+    }
+    near(number(scalar(&mut ex, "ST_DistanceSpheroid('GEOMETRYCOLLECTION(POLYGON EMPTY,LINESTRING(-1 0,1 0),POINT(10 10))','POINT(0 1)')")), 110574.38855779878, 0.00001);
+    assert_eq!(
+        scalar(
+            &mut ex,
+            "ST_DistanceSphere('LINESTRING(0 0,180 0)','POINT(0 1)')"
+        ),
+        Value::Null,
+        "an antipodal edge has no unique arc"
+    );
+    near(
+        number(scalar(
+            &mut ex,
+            "ST_DistanceSphere(ST_Point(0,0),ST_Point(180,0))",
+        )),
+        std::f64::consts::PI * 6371008.771415059,
+        0.00001,
+    );
+}
+
+#[test]
+fn geographic_polygon_interiors_holes_and_poles_are_spherical() {
+    let mut ex = Executor::new();
+    for polygon in [
+        "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))",
+        "POLYGON((179 -1,179 1,-179 1,-179 -1,179 -1))",
+    ] {
+        assert_eq!(
+            scalar(
+                &mut ex,
+                &format!("ST_DistanceSpheroid('{polygon}','POINT(180 0)')")
+            ),
+            Value::from(0.0)
+        );
+        assert!(
+            number(scalar(
+                &mut ex,
+                &format!("ST_DistanceSpheroid('{polygon}','POINT(0 0)')")
+            )) > 19_000_000.0
+        );
+    }
+    let cap = "POLYGON((-135 80,-45 80,45 80,135 80,-135 80))";
+    assert_eq!(
+        scalar(
+            &mut ex,
+            &format!("ST_DistanceSphere('{cap}','POINT(0 90)')")
+        ),
+        Value::from(0.0)
+    );
+    assert!(
+        number(scalar(
+            &mut ex,
+            &format!("ST_DistanceSphere('{cap}','POINT(0 -90)')")
+        )) > 18_000_000.0
+    );
+    let donut = "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1),(179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))";
+    let distance = number(scalar(
+        &mut ex,
+        &format!("ST_DistanceSpheroid('{donut}','POINT(180 0)')"),
+    ));
+    assert!(distance > 55_000.0 && distance < 56_000.0);
+    assert_eq!(
+        scalar(
+            &mut ex,
+            &format!("ST_DistanceSphere('{donut}','POINT(179.5 0)')")
+        ),
+        Value::from(0.0)
+    );
+    // Small local polygons must not lose their signed spherical area to rounding.
+    let kfm = "POLYGON((-86.5071 36.9399,-86.5069 36.9399,-86.5069 36.9401,-86.5071 36.9401,-86.5071 36.9399))";
+    assert_eq!(
+        scalar(
+            &mut ex,
+            &format!("ST_DistanceSpheroid('{kfm}','POINT(-86.507 36.940)')")
+        ),
+        Value::from(0.0)
+    );
+}
+
+#[test]
+fn empty_buffer_members_and_collapsed_polygon_validity() {
+    let mut ex = Executor::new();
+    for geometry in [
+        "GEOMETRYCOLLECTION(POLYGON EMPTY,POINT(0 0))",
+        "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POLYGON EMPTY),POINT(0 0))",
+        "MULTIPOLYGON(EMPTY,((0 0,10 0,10 10,0 10,0 0)))",
+    ] {
+        assert_eq!(
+            scalar(&mut ex, &format!("ST_IsValid(ST_Buffer('{geometry}',1))")),
+            Value::from(true),
+            "{geometry}"
+        );
+    }
+    assert_eq!(
+        scalar(&mut ex, "ST_IsValid('POLYGON((0 0,1 0,2 0,0 0))')"),
+        Value::from(false)
+    );
+    let spike = "ST_MakeValid('POLYGON((0 0,10 0,10 10,5 10,5 12,5 10,0 10,0 0))')";
+    near(
+        number(scalar(&mut ex, &format!("ST_Area({spike})"))),
+        100.0,
+        1e-9,
+    );
+    near(
+        number(scalar(&mut ex, &format!("ST_Length({spike})"))),
+        2.0,
+        1e-9,
+    );
+}
+
+#[test]
+fn make_valid_linework_matches_geos_reference_for_duplicate_and_overlapping_rings() {
+    let mut ex = Executor::new();
+    // Independent reference: Shapely 2.2.0 / GEOS 3.14.1 make_valid(linework).
+    for (wkt, area, length) in [
+        ("POLYGON((-0 0,2 2,0 2,2 0,0 0))", 2.0, 0.0),
+        (
+            "MULTIPOLYGON(((0 0,10 0,10 10,0 10,0 0)),((5 0,15 0,15 10,5 10,5 0)))",
+            150.0,
+            20.0,
+        ),
+        (
+            "MULTIPOLYGON(((0 0,10 0,10 10,0 10,0 0)),((5 5,15 5,15 15,5 15,5 5)))",
+            150.0,
+            0.0,
+        ),
+        (
+            "MULTIPOLYGON(((0 0,10 0,10 10,0 10,0 0)),((2 2,8 2,8 8,2 8,2 2)))",
+            64.0,
+            0.0,
+        ),
+        (
+            "MULTIPOLYGON(((0 0,10 0,10 10,0 10,0 0)),((0 0,10 0,10 10,0 10,0 0)))",
+            100.0,
+            0.0,
+        ),
+        (
+            "POLYGON((0 0,10 0,10 10,0 10,0 0),(3 3,7 3,7 7,3 7,3 3),(3 3,7 3,7 7,3 7,3 3))",
+            84.0,
+            0.0,
+        ),
+    ] {
+        let repaired = format!("ST_MakeValid('{wkt}')");
+        assert_eq!(
+            scalar(&mut ex, &format!("ST_IsValid({repaired})")),
+            Value::from(true),
+            "{wkt}"
+        );
+        near(
+            number(scalar(&mut ex, &format!("ST_Area({repaired})"))),
+            area,
+            1e-9,
+        );
+        near(
+            number(scalar(&mut ex, &format!("ST_Length({repaired})"))),
+            length,
+            1e-9,
+        );
+    }
+}
