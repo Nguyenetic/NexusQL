@@ -81,7 +81,7 @@ fn demo_atomicity() -> nexusql::Result<()> {
 
     let row1 = Row {
         columns: vec!["id".to_string(), "amount".to_string()],
-        values: vec![Value::Integer(1), Value::Float(100.0)],
+        values: vec![Value::Integer(1), Value::from(100.0)],
     };
 
     tm.log_operation(
@@ -95,7 +95,7 @@ fn demo_atomicity() -> nexusql::Result<()> {
 
     let row2 = Row {
         columns: vec!["id".to_string(), "amount".to_string()],
-        values: vec![Value::Integer(2), Value::Float(200.0)],
+        values: vec![Value::Integer(2), Value::from(200.0)],
     };
 
     tm.log_operation(
@@ -116,7 +116,7 @@ fn demo_atomicity() -> nexusql::Result<()> {
 
     let row3 = Row {
         columns: vec!["id".to_string(), "amount".to_string()],
-        values: vec![Value::Integer(3), Value::Float(300.0)],
+        values: vec![Value::Integer(3), Value::from(300.0)],
     };
 
     tm.log_operation(
@@ -151,7 +151,7 @@ fn demo_isolation() -> nexusql::Result<()> {
 
     let row = Row {
         columns: vec!["id".to_string(), "balance".to_string()],
-        values: vec![Value::Integer(1), Value::Float(1000.0)],
+        values: vec![Value::Integer(1), Value::from(1000.0)],
     };
 
     mvcc.insert_version("accounts", "1".to_string(), row.clone(), txn1);
@@ -171,7 +171,7 @@ fn demo_isolation() -> nexusql::Result<()> {
     // Txn2 updates balance
     let new_row = Row {
         columns: vec!["id".to_string(), "balance".to_string()],
-        values: vec![Value::Integer(1), Value::Float(900.0)],
+        values: vec![Value::Integer(1), Value::from(900.0)],
     };
 
     mvcc.update_version(

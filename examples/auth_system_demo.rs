@@ -300,7 +300,7 @@ fn demo_multi_tenant() -> nexusql::Result<()> {
                 Value::Integer(1),
                 Value::Text("tenant_a".to_string()),
                 Value::Text("Order A1".to_string()),
-                Value::Float(100.0),
+                Value::from(100.0),
             ],
         },
         Row {
@@ -314,7 +314,7 @@ fn demo_multi_tenant() -> nexusql::Result<()> {
                 Value::Integer(2),
                 Value::Text("tenant_b".to_string()),
                 Value::Text("Order B1".to_string()),
-                Value::Float(200.0),
+                Value::from(200.0),
             ],
         },
         Row {
@@ -328,7 +328,7 @@ fn demo_multi_tenant() -> nexusql::Result<()> {
                 Value::Integer(3),
                 Value::Text("tenant_a".to_string()),
                 Value::Text("Order A2".to_string()),
-                Value::Float(150.0),
+                Value::from(150.0),
             ],
         },
         Row {
@@ -342,7 +342,7 @@ fn demo_multi_tenant() -> nexusql::Result<()> {
                 Value::Integer(4),
                 Value::Text("tenant_c".to_string()),
                 Value::Text("Order C1".to_string()),
-                Value::Float(300.0),
+                Value::from(300.0),
             ],
         },
     ];
