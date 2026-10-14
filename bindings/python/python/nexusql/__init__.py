@@ -115,6 +115,28 @@ class NexusDB:
         """Alias for execute() retained for API compatibility."""
         return self.execute(sql, params)
 
+    def changes(self, feed: str, since: Optional[int] = None) -> List[dict]:
+        """Read committed events strictly after a cursor; None reads retained history.
+
+        An expired cursor raises RuntimeError. Geometry images contain WKT.
+        """
+        self._check_open()
+        return self._native.changes(feed, since)
+
+    def watch_changes(self, feed: str, since: Optional[int] = None) -> Iterator[dict]:
+        """Blocking iterator. None watches future commits; a cursor catches up first.
+
+        The returned iterator also has recv(timeout=None), returning None on a
+        timeout (seconds). Waiting releases the GIL. Slow consumers can expire.
+        """
+        self._check_open()
+        return self._native.watch_changes(feed, since)
+
+    def set_changefeed_retention(self, max_events: int) -> None:
+        """Set the durable global event limit (positive; default 10,000)."""
+        self._check_open()
+        self._native.set_changefeed_retention(max_events)
+
     def execute_many(self, sql: str, params_list: Sequence[Sequence[Any]]) -> int:
         """Execute a statement once per parameter tuple. Returns total rows_affected."""
         self._check_open()

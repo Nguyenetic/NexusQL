@@ -15,6 +15,75 @@ use tokio::runtime::Runtime;
 use nexusql::types::{Row, Value};
 use nexusql::{NexusSQL, ResultSet};
 
+fn change_to_py(py: Python<'_>, event: &nexusql::changefeed::ChangeEvent) -> PyResult<PyObject> {
+    let result = PyDict::new_bound(py);
+    result.set_item("feed", &event.feed)?;
+    result.set_item("sequence", event.sequence)?;
+    result.set_item("commit_sequence", event.commit_sequence)?;
+    result.set_item("timestamp_ms", event.timestamp_ms)?;
+    result.set_item("table", &event.table)?;
+    result.set_item("row_id", event.row_id)?;
+    result.set_item("operation", event.operation.as_str())?;
+    for (key, row) in [("old", &event.old), ("new", &event.new)] {
+        result.set_item(
+            key,
+            row.as_ref().map(|row| row_to_dict(py, row)).transpose()?,
+        )?;
+    }
+    if let Some(zone) = &event.zone {
+        let value = PyDict::new_bound(py);
+        value.set_item("table", &zone.table)?;
+        value.set_item("row_id", zone.row_id)?;
+        value.set_item("values", row_to_dict(py, &zone.values)?)?;
+        result.set_item("zone", value)?;
+    } else {
+        result.set_item("zone", py.None())?;
+    }
+    Ok(result.into())
+}
+
+/// Blocking iterator; no unbounded queue and the GIL is released while waiting.
+#[pyclass]
+struct ChangeIterator {
+    subscription: std::sync::Mutex<nexusql::changefeed::ChangeSubscription>,
+}
+
+#[pymethods]
+impl ChangeIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.recv(py, None)?
+            .ok_or_else(|| rt_err("Changefeed closed"))
+    }
+
+    /// Return the next event, or None after timeout seconds.
+    #[pyo3(signature = (timeout=None))]
+    fn recv(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<PyObject>> {
+        let timeout = timeout
+            .map(std::time::Duration::try_from_secs_f64)
+            .transpose()
+            .map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err("timeout must be finite and nonnegative")
+            })?;
+        let event = py
+            .allow_threads(|| {
+                let mut subscription = self.subscription.lock().unwrap();
+                match timeout {
+                    Some(timeout) => subscription.recv_timeout(timeout),
+                    None => subscription.recv().map(Some),
+                }
+            })
+            .map_err(rt_err)?;
+        event
+            .as_ref()
+            .map(|event| change_to_py(py, event))
+            .transpose()
+    }
+}
+
 fn rt_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
@@ -135,6 +204,44 @@ struct NexusDB {
 
 #[pymethods]
 impl NexusDB {
+    /// Committed events strictly after since; None returns the retained history.
+    #[pyo3(signature = (feed, since=None))]
+    fn changes(&self, py: Python<'_>, feed: &str, since: Option<u64>) -> PyResult<PyObject> {
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| rt_err("NexusDB closed"))?;
+        let events = py
+            .allow_threads(|| db.changes(feed, since))
+            .map_err(rt_err)?;
+        let result = PyList::empty_bound(py);
+        for event in &events {
+            result.append(change_to_py(py, event)?)?;
+        }
+        Ok(result.into())
+    }
+
+    /// None watches future events; a cursor catches up before blocking.
+    #[pyo3(signature = (feed, since=None))]
+    fn watch_changes(&self, feed: &str, since: Option<u64>) -> PyResult<ChangeIterator> {
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| rt_err("NexusDB closed"))?;
+        Ok(ChangeIterator {
+            subscription: std::sync::Mutex::new(db.subscribe(feed, since).map_err(rt_err)?),
+        })
+    }
+
+    fn set_changefeed_retention(&self, py: Python<'_>, max_events: usize) -> PyResult<()> {
+        let db = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| rt_err("NexusDB closed"))?;
+        py.allow_threads(|| db.set_changefeed_retention(max_events))
+            .map_err(rt_err)
+    }
+
     #[new]
     fn new(db_path: &str) -> PyResult<Self> {
         let rt = Runtime::new().map_err(rt_err)?;
@@ -326,5 +433,6 @@ impl NexusDB {
 fn _nexusql(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NexusDB>()?;
     m.add_class::<QueryResult>()?;
+    m.add_class::<ChangeIterator>()?;
     Ok(())
 }
