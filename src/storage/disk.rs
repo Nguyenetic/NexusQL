@@ -320,6 +320,17 @@ impl DiskStorage {
             .map_or(0, WriteAheadLog::len)
     }
 
+    #[cfg(test)]
+    pub(crate) fn inject_wal_write_failure(&self, path: &Path) {
+        self.state
+            .lock()
+            .unwrap()
+            .wal
+            .as_mut()
+            .unwrap()
+            .inject_write_failure(path);
+    }
+
     fn get(db: &Db, state: &DiskState, key: &[u8]) -> Result<Option<Vec<u8>>> {
         if let Some(value) = state.committed.get(key) {
             return Ok(value.clone());

@@ -6,6 +6,8 @@ use crate::types::Value;
 /// SQL Statement types
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
+    /// Commit-scoped change feeds and geofence subscriptions.
+    Changefeed(crate::changefeed::ChangefeedStatement),
     CreateTable {
         name: String,
         columns: Vec<ColumnDef>,
