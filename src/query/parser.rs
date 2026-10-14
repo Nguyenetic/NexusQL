@@ -74,8 +74,8 @@ impl Dialect for NexusQLDialect {
         expr: &sql_ast::Expr,
         precedence: u8,
     ) -> Option<std::result::Result<sql_ast::Expr, ParserError>> {
-        if self.get_next_precedence(parser).is_none() {
-            return None;
+        if let Err(error) = self.get_next_precedence(parser)? {
+            return Some(Err(error));
         }
         parser.next_token();
         parser.next_token();

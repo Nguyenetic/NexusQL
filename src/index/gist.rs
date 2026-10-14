@@ -12,7 +12,7 @@
 //! - Lossy compression via bounding boxes
 
 use crate::types::Value;
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -31,6 +31,13 @@ impl RTreeObject for SpatialEntry {
     }
 }
 
+impl PointDistance for SpatialEntry {
+    fn distance_2(&self, point: &[f64; 2]) -> f64 {
+        // A lower bound only: the executor rechecks the original geometry.
+        self.bounds.distance_2(point)
+    }
+}
+
 /// GiST Index - Generalized Search Tree
 #[derive(Debug, Clone)]
 pub struct GiSTIndex {
@@ -43,6 +50,8 @@ pub struct GiSTIndex {
     /// Root node of the tree
     root: Option<Box<GiSTNode>>,
     spatial: RTree<SpatialEntry>,
+    spatial_srid: Option<i32>,
+    mixed_spatial_srids: bool,
     searches: Arc<AtomicU64>,
     candidates: Arc<AtomicU64>,
 
@@ -303,6 +312,8 @@ impl GiSTIndex {
             column_name,
             root: None,
             spatial: RTree::new(),
+            spatial_srid: None,
+            mixed_spatial_srids: false,
             searches: Arc::new(AtomicU64::new(0)),
             candidates: Arc::new(AtomicU64::new(0)),
             index_type,
@@ -315,6 +326,13 @@ impl GiSTIndex {
         if let Some(predicate) = self.value_to_predicate(value) {
             if self.index_type == GiSTIndexType::RTree {
                 if let Some(bounds) = predicate.envelope() {
+                    if let Value::Geometry(g) = value {
+                        let srid = g.srid.unwrap_or(0);
+                        if self.spatial_srid.is_some_and(|previous| previous != srid) {
+                            self.mixed_spatial_srids = true;
+                        }
+                        self.spatial_srid = Some(srid);
+                    }
                     self.spatial.insert(SpatialEntry { row_id, bounds });
                     self.entry_count += 1;
                 }
@@ -425,11 +443,37 @@ impl GiSTIndex {
         self.index_type
     }
 
+    /// KNN pruning requires a numeric distance for every row. NULL/empty values
+    /// and mismatched SRIDs must retain the executor's existing full-sort behavior.
+    pub(crate) fn supports_knn(&self, srid: Option<i32>, row_count: usize) -> bool {
+        self.index_type == GiSTIndexType::RTree
+            && self.entry_count == row_count
+            && !self.mixed_spatial_srids
+            && (row_count == 0 || self.spatial_srid == Some(srid.unwrap_or(0)))
+    }
+
+    /// Lazily visit bounding boxes in increasing squared distance from a point.
+    /// Count only candidates actually pulled, including the stopping lookahead.
+    pub(crate) fn nearest_neighbors(
+        &self,
+        point: [f64; 2],
+    ) -> impl Iterator<Item = (usize, f64)> + '_ {
+        self.searches.fetch_add(1, Ordering::Relaxed);
+        self.spatial
+            .nearest_neighbor_iter_with_distance_2(point)
+            .map(|(entry, distance)| {
+                self.candidates.fetch_add(1, Ordering::Relaxed);
+                (entry.row_id, distance)
+            })
+    }
+
     /// Row IDs are vector offsets. Rebuild after a delete or update so offsets
     /// and bounds cannot become stale; retain diagnostic counters.
     pub fn clear(&mut self) {
         self.root = None;
         self.spatial = RTree::new();
+        self.spatial_srid = None;
+        self.mixed_spatial_srids = false;
         self.entry_count = 0;
     }
 

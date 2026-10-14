@@ -638,7 +638,48 @@ impl Executor {
                     })?
                 };
 
-                let mut rows = if from.table.is_empty() {
+                // Resolve SELECT aliases before choosing an ORDER BY access path.
+                let order_expr = order_by.as_ref().map(|order| {
+                    if let Expr::Column(name) = &order.expr {
+                        columns
+                            .iter()
+                            .find_map(|item| match item {
+                                SelectItem::Expr {
+                                    expr,
+                                    alias: Some(alias),
+                                } if alias == name => Some(expr),
+                                _ => None,
+                            })
+                            .unwrap_or(&order.expr)
+                    } else {
+                        &order.expr
+                    }
+                });
+                let nearest = match (order_by, order_expr, limit) {
+                    (Some(order), Some(expr), Some(k))
+                        if order.ascending
+                            && !from.table.is_empty()
+                            && from.joins.is_empty()
+                            && group_by.is_empty()
+                            && !has_aggregate_functions(columns)
+                            && !has_window_functions(columns)
+                            && !where_clause.as_ref().is_some_and(Self::contains_subqueries) =>
+                    {
+                        super::spatial::knn_rows(
+                            table,
+                            from,
+                            expr,
+                            *k,
+                            where_clause.as_ref(),
+                            params,
+                        )
+                    }
+                    _ => None,
+                };
+                let used_knn = nearest.is_some();
+                let mut rows = if let Some(rows) = nearest {
+                    rows
+                } else if from.table.is_empty() {
                     vec![Row::new(vec![], vec![])]
                 } else if from.joins.is_empty() {
                     let outer = Row::new(vec![], vec![]);
@@ -675,7 +716,7 @@ impl Executor {
                 }
 
                 // Apply WHERE clause filter with subquery support
-                if let Some(expr) = where_clause {
+                if let Some(expr) = where_clause.as_ref().filter(|_| !used_knn) {
                     if Self::contains_subqueries(expr) {
                         // Use subquery-aware evaluation
                         let mut filtered_rows = Vec::new();
@@ -738,23 +779,8 @@ impl Executor {
                 }
 
                 // Apply ORDER BY sorting (especially for vector distance)
-                if let Some(order) = order_by {
-                    // SELECT aliases refer to their expressions when sorting
-                    // source rows (projection happens after ORDER BY / LIMIT).
-                    let order_expr = if let Expr::Column(name) = &order.expr {
-                        columns
-                            .iter()
-                            .find_map(|item| match item {
-                                SelectItem::Expr {
-                                    expr,
-                                    alias: Some(alias),
-                                } if alias == name => Some(expr),
-                                _ => None,
-                            })
-                            .unwrap_or(&order.expr)
-                    } else {
-                        &order.expr
-                    };
+                if let Some(order) = order_by.as_ref().filter(|_| !used_knn) {
+                    let order_expr = order_expr.unwrap();
                     // Expensive scalar scores/distances need evaluation once
                     // per row, not once per comparison during sorting.
                     if order.ascending {
