@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 NexusQL is a high-performance, PostgreSQL-compatible database engine written in Rust with brain-inspired AI technologies (HDC, ColBERT) and advanced vector search capabilities. The project includes:
-- **Core Rust library** (`src/`) - Database engine with ACID transactions, MVCC, multiple storage engines
+- **Core Rust library** (`src/`) - Multiple storage engines; default disk SQL has WAL-backed transactions (FULL sync by default), with one shared SQL session rather than SQL MVCC
 - **TypeScript/Node.js bindings** (`bindings/typescript/`) - N-API native module for JavaScript
 - **Python bindings** (`bindings/python/`) - PyO3-based bindings (planned)
 
@@ -87,20 +87,23 @@ npm run build:native -- --target x86_64-pc-windows-msvc
 ### Core Components
 
 **Storage Layer** (`src/storage/`)
-- `LSMStorage` - Log-structured merge-tree with memtable, WAL, and SSTables
+- `DiskStorage` - Default SQL backend: sled table chunks plus `default/nexusql.wal`, committed-frame recovery, and checkpointing
+- `LSMStorage` - Separate key/value API; not the default SQL durability path
 - Supports both disk-based and in-memory (`:memory:`) databases
-- WAL is optional for in-memory mode
+- WAL is disabled for in-memory mode
 
 **Storage Engines** (`src/engine/`)
-- `DefaultEngine` - Standard relational storage (LSM-based)
+- `DefaultEngine` - Standard relational storage (sled plus the SQL WAL)
 - `ColBERTEngine` - Neural semantic search with token-level embeddings
 - `HDCEngine` - Hyperdimensional computing for brain-inspired AI
 - Engines are registered with the kernel and routed via SQL hints
 
 **Transaction System** (`src/transaction/`)
-- MVCC (Multi-Version Concurrency Control)
-- Write-Ahead Logging (WAL) for durability
-- ACID compliance with snapshot isolation
+- SQL BEGIN keeps an in-memory rollback snapshot; dirty tables enter the WAL only at COMMIT
+- FULL (default) syncs the WAL before acknowledging COMMIT; NORMAL/OFF weaken durability
+- Checkpoints wait for readers, sync committed data to sled, and reset the log; GiST rebuilds from recovered rows and definitions
+- One shared SQL session, not SQL MVCC. The separate TransactionManager/MVCC API is not used by SQL
+- Bulk-mode autocommits require flush/shutdown; flush during BEGIN does not commit that transaction. See [the durability contract and audit](docs/development/durability.md)
 
 **Query Processing**
 - `QueryParser` (`src/query/parser.rs`) - Uses `sqlparser-rs` with PostgreSQL dialect
@@ -198,8 +201,10 @@ await db.execute(
 
 **Supported PRAGMA commands**:
 - `PRAGMA foreign_keys` - Query foreign key enforcement (returns 0, not enforced)
-- `PRAGMA journal_mode` - Query/set WAL journaling mode
-- `PRAGMA synchronous` - Query/set synchronous mode (FULL=2, NORMAL=1, OFF=0)
+- `PRAGMA journal_mode` - Disk SQL uses WAL; other modes are rejected
+- `PRAGMA synchronous` - Disk SQL sync policy (FULL=2 default, NORMAL=1, OFF=0); applies until reopen, cannot change inside BEGIN
+- `PRAGMA nexusql_wal_checkpoint_bytes` - Disk WAL automatic checkpoint threshold in bytes (default 4194304, 0 disables)
+- `PRAGMA wal_checkpoint` - Copy committed WAL data to sled and reset the log
 - `PRAGMA table_info(table_name)` - Get table schema (cid, name, type, notnull, dflt_value, pk)
 - `PRAGMA user_version` - User-defined version for schema migrations
 - `PRAGMA schema_version` - Internal schema version (read-only, returns 1)
@@ -376,7 +381,7 @@ await db.execute(`INSERT INTO table VALUES ('${escaped}')`);
 
 **File Locking**: Windows holds file handles longer than Unix systems. The in-memory database (`:memory:`) avoids these issues entirely.
 
-**WAL/SHM Files**: SQLite creates `.db-wal` and `.db-shm` files. These are automatically handled by the storage layer.
+**WAL Files**: Default disk SQL uses `default/nexusql.wal` alongside sled's files. This is a NexusQL format, with no SQLite SHM file. Preserve the whole database directory when copying a closed database.
 
 ### TypeScript Type Definitions
 

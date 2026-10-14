@@ -32,7 +32,7 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 - **Small-corpus SQL** - Model-free short-name ranking and persistent one-shot
   classifiers ([usage](docs/guides/small-corpus-ai.md))
 - **HNSW Vector Index** - Logarithmic search with 99%+ recall
-- **Full ACID Compliance** - MVCC transactions with crash recovery
+- **Durable disk SQL transactions** - Checksummed WAL, atomic commit/rollback, FULL sync by default; one shared SQL session (not SQL MVCC)
 - **Parameterized Queries** - Built-in SQL injection prevention
 
 ### 🎯 Perfect For
@@ -76,7 +76,7 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 <details>
 <summary><b>🗄️ Core Database Features</b></summary>
 
-- ✅ **ACID Transactions** - Full MVCC with crash recovery and WAL
+- ✅ **Disk SQL transactions** - Committed-frame recovery and checkpointing; FULL sync by default. NORMAL/OFF weaken durability; bulk-mode autocommits require flush. See [durability guarantees and limits](docs/development/durability.md).
 - ✅ **Parameterized Queries** - SQL injection prevention with `$1, $2` placeholders
 - ✅ **Prepared Statements** - Compile once, execute many times
 - ✅ **Schema System** - Tables, columns, constraints (PK, FK, UNIQUE, CHECK)
@@ -156,7 +156,7 @@ and [spatial SQL guide](docs/guides/geometry.md).
 # Full-featured (default): includes HDC, ColBERT, HNSW vector search (pulls in ort + tokenizers)
 nexusql = { git = "https://github.com/Nguyenetic/NexusQL.git" }
 
-# Core only (no ML deps): LSM storage + SQL + ACID transactions, no vector search.
+# Core only (no ML deps): sled-backed SQL + WAL transactions, no vector search.
 # Required for mobile / constrained targets where `ort` and `tokenizers` can't build.
 nexusql = { git = "https://github.com/Nguyenetic/NexusQL.git", default-features = false }
 ```
@@ -346,7 +346,7 @@ Complete Node.js/TypeScript API reference with interactive examples.
 | Class | Description | Documentation |
 |-------|-------------|---------------|
 | **NexusDB** | Main database class | [API Docs](docs/api/typescript/CLASSES.md#nexusdb) |
-| **Transaction** | ACID transaction handle | [API Docs](docs/api/typescript/CLASSES.md#transaction) |
+| **Transaction** | Transaction handle; see [disk guarantees](docs/development/durability.md) | [API Docs](docs/api/typescript/CLASSES.md#transaction) |
 | **PreparedStatement** | Compiled query with parameters | [API Docs](docs/api/typescript/CLASSES.md#preparedstatement) |
 
 #### Key Methods
@@ -355,7 +355,7 @@ Complete Node.js/TypeScript API reference with interactive examples.
 | `execute(sql)` | Run SQL without parameters | [Docs](docs/api/typescript/METHODS.md#execute) |
 | `execute_with_params(sql, params)` | Parameterized queries (SQL injection safe) | [Docs](docs/api/typescript/METHODS.md#execute_with_params) |
 | `query(sql)` | SELECT queries | [Docs](docs/api/typescript/METHODS.md#query) |
-| `begin_transaction()` | Start ACID transaction | [Docs](docs/api/typescript/METHODS.md#begin_transaction) |
+| `begin_transaction()` | Start transaction | [Docs](docs/api/typescript/METHODS.md#begin_transaction) |
 | `vectorSearch(table, vector, limit)` | Semantic search with HNSW | [Docs](docs/api/typescript/METHODS.md#vectorsearch) |
 
 📘 **[Complete TypeScript API Reference →](docs/api/typescript/README.md)**
@@ -388,7 +388,7 @@ Native Rust library with async support and zero-copy operations.
 
 #### Data Operations
 - 🔍 [Vector Search](docs/guides/vector-search.md) - Semantic search with HNSW
-- 💾 [Transactions](docs/guides/transactions.md) - ACID guarantees and patterns
+- 💾 [Transactions](docs/guides/transactions.md) - Usage patterns; [current disk durability contract](docs/development/durability.md)
 - 📊 [Batch Operations](docs/guides/batch-operations.md) - 10-100× faster inserts
 
 #### Performance
@@ -550,7 +550,7 @@ cargo bench
 
 - ✅ Parameterized queries with SQL injection prevention
 - ✅ Prepared statements API
-- ✅ Transaction support with MVCC
+- ✅ WAL-backed disk SQL transactions; standalone MVCC API is separate
 - ✅ Vector search with HNSW index
 - ✅ Full-text search
 - ✅ Advanced indexing (B-Tree, GIN, GiST, BRIN)

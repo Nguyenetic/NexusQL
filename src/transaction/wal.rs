@@ -1,5 +1,6 @@
 // Write-Ahead Log (WAL)
-// PostgreSQL-compatible WAL for durability and crash recovery
+// Standalone TransactionManager operation journal (not used by SQL storage).
+// SQL crash recovery uses storage::wal and transaction::durable instead.
 
 use super::TransactionId;
 use crate::types::Row;
@@ -209,6 +210,7 @@ impl WALManager {
     /// Flush WAL to disk
     pub fn flush(&mut self) -> Result<()> {
         self.writer.flush()?;
+        self.writer.get_ref().sync_all()?;
 
         self.unflushed_records = 0;
         Ok(())
