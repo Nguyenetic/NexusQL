@@ -1,13 +1,20 @@
-//! Planar, two-dimensional SQL geometry. All geometry algorithms are georust's.
+//! Two-dimensional SQL geometry, WGS84 projections and geographic measurements.
+
+mod geodesic;
+mod geojson;
+mod topology;
+mod transform;
 
 use crate::types::Value;
-use geo::{Area, BoundingRect, Centroid, Contains, CoordsIter, Distance, Euclidean, Intersects};
+use geo::{
+    Area, BoundingRect, Centroid, Contains, CoordsIter, Distance, Euclidean, Intersects, Relate,
+};
 use geo_types::{Geometry, LineString, Point, Rect};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use wkt::{ToWkt, TryFromWkt};
 
-/// A geometry with optional coordinate-system metadata (no reprojection).
+/// A geometry with optional coordinate-system metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeometryValue {
     shape: Geometry<f64>,
@@ -114,6 +121,36 @@ pub(crate) fn evaluate(name: &str, args: &[Value]) -> Value {
     evaluate_inner(name, args).unwrap_or(Value::Null)
 }
 
+/// SQL aggregate union ignores NULL rows, but an invalid non-NULL input or SRID
+/// mismatch invalidates the whole result. An empty/all-NULL group returns NULL.
+pub(crate) fn union_aggregate(values: impl Iterator<Item = Value>) -> Value {
+    let mut result: Option<GeometryValue> = None;
+    for input in values.filter(|v| !v.is_null()) {
+        let Some(g) = geometry(&input) else {
+            return Value::Null;
+        };
+        let shape = if let Some(previous) = &result {
+            if previous.srid.unwrap_or(0) != g.srid.unwrap_or(0) {
+                return Value::Null;
+            }
+            topology::union(previous.shape(), g.shape())
+        } else {
+            topology::union(
+                g.shape(),
+                &Geometry::GeometryCollection(geo_types::GeometryCollection::empty()),
+            )
+        };
+        let Some(shape) = shape else {
+            return Value::Null;
+        };
+        let Ok(merged) = GeometryValue::new(shape, g.srid) else {
+            return Value::Null;
+        };
+        result = Some(merged);
+    }
+    result.map(Value::Geometry).unwrap_or(Value::Null)
+}
+
 fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
     if args.iter().any(Value::is_null) {
         return None;
@@ -130,6 +167,26 @@ fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
             Point::new(number(&args[0])?, number(&args[1])?).into(),
             None,
         ),
+        "ST_SETSRID" | "ST_TRANSFORM" if args.len() == 2 => {
+            let mut g = geometry(&args[0])?.into_owned();
+            let srid = i32::try_from(args[1].as_i64()?).ok()?;
+            if name == "ST_TRANSFORM" {
+                g = transform::reproject(&g, srid)?;
+            } else {
+                g.srid = Some(srid);
+            }
+            Some(Value::Geometry(g))
+        }
+        "ST_DISTANCESPHERE" | "ST_DISTANCESPHEROID" if matches!(args.len(), 2 | 3) => {
+            geodesic::evaluate(name, args).map(Value::from)
+        }
+        "ST_GEOMFROMGEOJSON" if args.len() == 1 => {
+            geojson::from_json(args[0].as_str()?).map(Value::Geometry)
+        }
+        "ST_BUFFER" if args.len() == 2 => {
+            let g = geometry(&args[0])?;
+            value(topology::buffer(g.shape(), number(&args[1])?)?, g.srid)
+        }
         "ST_MAKEENVELOPE" if matches!(args.len(), 4 | 5) => {
             let (xmin, ymin, xmax, ymax) = (
                 number(&args[0])?,
@@ -151,11 +208,17 @@ fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
             )
         }
         "ST_ASTEXT" | "ST_SRID" | "ST_X" | "ST_Y" | "ST_AREA" | "ST_CENTROID" | "ST_ENVELOPE"
+        | "ST_ASGEOJSON" | "ST_ISVALID" | "ST_MAKEVALID" | "ST_LENGTH" | "ST_PERIMETER"
             if args.len() == 1 =>
         {
             let g = geometry(&args[0])?;
             match name {
                 "ST_ASTEXT" => Some(Value::Text(g.as_text())),
+                "ST_ASGEOJSON" => Some(Value::Text(geojson::as_json(&g))),
+                "ST_ISVALID" => Some(Value::Boolean(topology::is_valid(g.shape()))),
+                "ST_MAKEVALID" => value(topology::make_valid(g.shape())?, g.srid),
+                "ST_LENGTH" => Some(Value::from(topology::length(g.shape()))),
+                "ST_PERIMETER" => Some(Value::from(topology::perimeter(g.shape()))),
                 "ST_SRID" => Some(Value::Integer(g.srid.unwrap_or(0) as i64)),
                 "ST_X" | "ST_Y" => match g.shape() {
                     Geometry::Point(p) => {
@@ -182,6 +245,7 @@ fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
             }
         }
         "ST_CONTAINS" | "ST_WITHIN" | "ST_INTERSECTS" | "ST_DISTANCE" | "ST_DWITHIN"
+        | "ST_COVERS" | "ST_COVEREDBY" | "ST_UNION" | "ST_CLOSESTPOINT"
             if args.len() == if name == "ST_DWITHIN" { 3 } else { 2 } =>
         {
             let a = geometry(&args[0])?;
@@ -193,6 +257,13 @@ fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
                 "ST_CONTAINS" => Some(Value::Boolean(a.shape.contains(&b.shape))),
                 "ST_WITHIN" => Some(Value::Boolean(b.shape.contains(&a.shape))),
                 "ST_INTERSECTS" => Some(Value::Boolean(a.shape.intersects(&b.shape))),
+                "ST_COVERS" => Some(Value::Boolean(a.shape.relate(&b.shape).is_covers())),
+                "ST_COVEREDBY" => Some(Value::Boolean(a.shape.relate(&b.shape).is_coveredby())),
+                "ST_UNION" => value(topology::union(a.shape(), b.shape())?, a.srid),
+                "ST_CLOSESTPOINT" => value(
+                    topology::closest_point(a.shape(), b.shape())?.into(),
+                    a.srid,
+                ),
                 _ => {
                     if a.bounds().is_none() || b.bounds().is_none() {
                         return if name == "ST_DWITHIN" {

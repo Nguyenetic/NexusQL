@@ -45,9 +45,10 @@ fn has_aggregate_functions(select_items: &[SelectItem]) -> bool {
 /// Check if an expression is an aggregate function
 fn is_aggregate_expr(expr: &Expr) -> bool {
     match expr {
-        Expr::Function { name, .. } => {
+        Expr::Function { name, args } => {
             let name_upper = name.to_uppercase();
             matches!(name_upper.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                || (name_upper == "ST_UNION" && args.len() == 1)
         }
         _ => false,
     }
@@ -71,6 +72,9 @@ fn evaluate_aggregate(rows: &[Row], name: &str, args: &[Expr], params: &QueryPar
     let name_upper = name.to_uppercase();
 
     match name_upper.as_str() {
+        "ST_UNION" if args.len() == 1 => crate::geometry::union_aggregate(
+            rows.iter().map(|row| evaluate_expr(row, &args[0], params)),
+        ),
         "COUNT" => {
             // COUNT(*) counts all rows, COUNT(column) counts non-NULL values
             if args.is_empty() || matches!(args.first(), Some(Expr::Wildcard)) {
@@ -2287,6 +2291,9 @@ impl Executor {
         let func_upper = func_name.to_uppercase();
 
         match func_upper.as_str() {
+            "ST_UNION" if args.len() == 1 => {
+                Ok(evaluate_aggregate(group_rows, func_name, args, params))
+            }
             "COUNT" => {
                 if args.len() == 1 {
                     if matches!(&args[0], Expr::Wildcard) {
