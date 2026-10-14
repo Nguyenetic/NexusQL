@@ -1160,10 +1160,6 @@ impl Executor {
         &self.tables
     }
 
-    pub(crate) fn is_transaction_active(&self) -> bool {
-        self.transaction_active
-    }
-
     pub fn get_tables_mut(&mut self) -> &mut HashMap<String, Table> {
         &mut self.tables
     }

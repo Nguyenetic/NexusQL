@@ -4,23 +4,21 @@
 //! first before-image and final after-image of a row. No SQLite code is copied.
 
 mod capture;
+mod commit;
 mod sql;
 mod subscription;
 
 pub use sql::parse_statement;
 pub use subscription::ChangeSubscription;
 
-use crate::engine::{Executor, Query};
-use crate::query::ast::{DataType, Statement, TransactionOp};
-use crate::query::evaluator::QueryParams;
+use crate::query::ast::{DataType, Statement};
 use crate::storage::{disk::DiskStorage, Table};
-use crate::types::{ResultSet, Row, Value};
+use crate::types::{Row, Value};
 use crate::{NexusError, NexusSQL, Result};
-use capture::{geofence_events, wkt_row, Identities, Pending, Snapshot};
+use capture::{Identities, Pending, Snapshot};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Reserved, versioned internal table. It is not exposed as a user table.
 pub const LOG_TABLE: &str = "__nexus_changefeed_log";
@@ -158,7 +156,7 @@ struct Journal {
 }
 
 impl Journal {
-    fn persist(&self, disk: &DiskStorage) -> Result<()> {
+    fn table(&self) -> Result<Table> {
         let mut table = Table::new(LOG_TABLE.into(), vec!["kind".into(), "payload".into()]);
         table.rows.push(Row::new(
             table.columns.clone(),
@@ -176,8 +174,11 @@ impl Journal {
                 ],
             ));
         }
-        disk.save_table(&table)?;
-        disk.sync()
+        Ok(table)
+    }
+
+    fn persist(&self, disk: &DiskStorage) -> Result<()> {
+        disk.commit_tables(&[&self.table()?], &[])
     }
 
     fn load(disk: &DiskStorage) -> Result<Self> {
@@ -235,8 +236,8 @@ impl Journal {
 struct State {
     journal: Journal,
     snapshots: BTreeMap<String, Snapshot>,
-    transaction: Option<Pending>,
-    failure: Option<String>,
+    pending: Option<Pending>,
+    transaction_active: bool,
 }
 
 struct Shared {
@@ -281,8 +282,8 @@ impl Changefeeds {
                 state: Mutex::new(State {
                     journal,
                     snapshots,
-                    transaction: None,
-                    failure: None,
+                    pending: None,
+                    transaction_active: false,
                 }),
                 changed: Condvar::new(),
                 disk,
@@ -320,7 +321,7 @@ impl Changefeeds {
             return Err(error("Changefeed retention must be at least one event"));
         }
         let mut state = self.shared.state.lock().unwrap();
-        if state.transaction.is_some() {
+        if state.transaction_active {
             return Err(error(
                 "Changefeed retention cannot change inside a transaction",
             ));
@@ -361,27 +362,9 @@ impl Changefeeds {
             .is_empty()
     }
 
-    /// Validate feed DDL and protect watched rows against partial statement errors.
-    /// Transaction execution itself remains owned by Executor/the WAL worker.
-    pub(crate) fn execute_statement(
-        &self,
-        executor: &mut Executor,
-        statement: &Statement,
-        params: &QueryParams,
-    ) -> Result<ResultSet> {
+    /// Reject schema changes to watched tables and writes to the internal log.
+    pub(crate) fn validate_statement(&self, statement: &Statement) -> Result<()> {
         let state = self.shared.state.lock().unwrap();
-        if let Some(failure) = &state.failure {
-            return Err(error(failure.clone()));
-        }
-        if let Statement::Changefeed(command) = statement {
-            drop(state);
-            self.manage(
-                command,
-                executor.get_tables(),
-                executor.is_transaction_active(),
-            )?;
-            return Ok(ResultSet::empty());
-        }
         if let Statement::CreateTable { name, .. } | Statement::DropTable { name, .. } = statement {
             if name == LOG_TABLE || state.snapshots.contains_key(name) {
                 return Err(error(
@@ -389,26 +372,20 @@ impl Changefeeds {
                 ));
             }
         }
-        if let Some(name) = touched_table(statement) {
-            if name == LOG_TABLE {
-                return Err(error("The internal changefeed log is read-only"));
-            }
+        let table = match statement {
+            Statement::Insert { table, .. }
+            | Statement::Update { table, .. }
+            | Statement::CreateIndex { table, .. } => Some(table),
+            Statement::Delete { from, .. } => Some(from),
+            _ => None,
+        };
+        if table.is_some_and(|table| table == LOG_TABLE) {
+            return Err(error("The internal changefeed log is read-only"));
         }
-        let backup = touched_table(statement)
-            .filter(|name| state.snapshots.contains_key(*name))
-            .and_then(|name| executor.get_tables().get(name))
-            .cloned();
-        drop(state);
-        let result = executor.execute(statement, params);
-        if result.is_err() {
-            if let Some(table) = backup {
-                executor.get_tables_mut().insert(table.name.clone(), table);
-            }
-        }
-        result
+        Ok(())
     }
 
-    fn manage(
+    pub(crate) fn manage(
         &self,
         command: &ChangefeedStatement,
         tables: &HashMap<String, Table>,
@@ -480,183 +457,12 @@ impl Changefeeds {
             .iter()
             .map(|(name, snapshot)| (name.clone(), snapshot.identities.clone()))
             .collect();
-        // Feed creation also makes the starting snapshot durable in bulk mode.
-        for name in snapshots.keys() {
-            self.shared.disk.save_table(&tables[name])?;
-        }
+        // DurableExecutor flushes preceding deferred writes before feed DDL.
         next.persist(&self.shared.disk)?;
         state.journal = next;
         state.snapshots = snapshots;
         self.shared.changed.notify_all();
         Ok(())
-    }
-
-    /// The single integration hook: called after successful engine execution and
-    /// persistence. It accumulates active transactions, discards rollbacks, and
-    /// persists completed changes before waking any subscriber.
-    pub(crate) fn post_commit(
-        &self,
-        statement: &Statement,
-        tables: &HashMap<String, Table>,
-        in_transaction: bool,
-    ) -> Result<()> {
-        let mut state = self.shared.state.lock().unwrap();
-        match statement {
-            Statement::Transaction {
-                operation: TransactionOp::Begin,
-            } => {
-                state.transaction = Some(Pending {
-                    before: state.snapshots.clone(),
-                    ..Pending::default()
-                });
-                return Ok(());
-            }
-            Statement::Transaction {
-                operation: TransactionOp::Rollback,
-            } => {
-                if let Some(pending) = state.transaction.take() {
-                    state.snapshots = pending.before;
-                    // Base snapshot transactions persist each DML statement.
-                    // Restore watched tables too; no log record is generated.
-                    for name in state.snapshots.keys() {
-                        self.shared.disk.save_table(&tables[name])?;
-                    }
-                    self.shared.disk.sync()?;
-                }
-                return Ok(());
-            }
-            Statement::Transaction {
-                operation: TransactionOp::Commit,
-            } => {}
-            _ if touched_table(statement).is_none() => return Ok(()),
-            _ => {}
-        }
-        if state.journal.metadata.feeds.is_empty() {
-            if !in_transaction {
-                state.transaction = None;
-            }
-            return Ok(());
-        }
-        let mut pending = state.transaction.take().unwrap_or_else(|| Pending {
-            before: state.snapshots.clone(),
-            ..Pending::default()
-        });
-        if let Some(name) = touched_table(statement) {
-            if let Some(snapshot) = state.snapshots.get_mut(name) {
-                pending.record(snapshot.capture(statement, &tables[name])?);
-            }
-        }
-        if in_transaction {
-            state.transaction = Some(pending);
-            return Ok(());
-        }
-        if pending.changes.is_empty() {
-            return Ok(());
-        }
-        let mut next = state.journal.clone();
-        let mut events = Vec::new();
-        for change in pending.changes.iter().filter(|c| c.old != c.new) {
-            for (name, feed) in &next.metadata.feeds {
-                if let FeedKind::Rows { tables } = &feed.kind {
-                    if tables.contains(&change.table) {
-                        let mut event = change.clone();
-                        event.feed = name.clone();
-                        events.push(event);
-                    }
-                }
-            }
-        }
-        let touched: BTreeSet<_> = pending.changes.iter().map(|c| c.table.as_str()).collect();
-        for (name, feed) in &next.metadata.feeds {
-            if feed
-                .kind
-                .tables()
-                .iter()
-                .any(|table| touched.contains(table))
-            {
-                for mut event in geofence_events(&feed.kind, &pending.before, &state.snapshots) {
-                    event.feed = name.clone();
-                    events.push(event);
-                }
-            }
-        }
-        let timestamp_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| error(e.to_string()))?
-            .as_millis() as u64;
-        for mut event in events {
-            event.sequence = next.metadata.next_sequence;
-            event.commit_sequence = next.metadata.next_commit;
-            event.timestamp_ms = timestamp_ms;
-            event.old = event.old.as_ref().map(wkt_row);
-            event.new = event.new.as_ref().map(wkt_row);
-            next.metadata.next_sequence += 1;
-            next.events.push_back(event);
-        }
-        next.metadata.next_commit += 1;
-        next.metadata.identities = state
-            .snapshots
-            .iter()
-            .map(|(name, snapshot)| (name.clone(), snapshot.identities.clone()))
-            .collect();
-        next.trim();
-        let persisted = (|| {
-            // Ensure watched data is durable even if the caller enabled bulk mode.
-            for name in touched {
-                self.shared.disk.save_table(&tables[name])?;
-            }
-            next.persist(&self.shared.disk)
-        })();
-        if let Err(cause) = persisted {
-            let message = format!("Data committed but changefeed persistence failed: {cause}; reopen and resnapshot before further writes");
-            state.failure = Some(message.clone());
-            self.shared.changed.notify_all();
-            return Err(error(message));
-        }
-        state.journal = next;
-        self.shared.changed.notify_all();
-        Ok(())
-    }
-}
-
-fn touched_table(statement: &Statement) -> Option<&str> {
-    match statement {
-        Statement::Insert { table, .. } | Statement::Update { table, .. } => Some(table),
-        Statement::Delete { from, .. } => Some(from),
-        _ => None,
-    }
-}
-
-/// Route watched direct/fast inserts through the same commit hook as SQL DML.
-pub(crate) fn bulk_query(table: &str, columns: &[String], rows: Vec<Vec<Value>>) -> Query {
-    let quoted = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
-    let mut params = Vec::new();
-    let values = rows
-        .into_iter()
-        .map(|row| {
-            let values = row
-                .into_iter()
-                .map(|value| {
-                    params.push(value);
-                    format!("${}", params.len())
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("({values})")
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    Query {
-        sql: format!(
-            "INSERT INTO {} ({}) VALUES {values}",
-            quoted(table),
-            columns
-                .iter()
-                .map(|c| quoted(c))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        params,
     }
 }
 

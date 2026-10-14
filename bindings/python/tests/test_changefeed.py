@@ -111,3 +111,45 @@ def test_closed_database_rejects_feed_calls():
         db.changes("live")
     with pytest.raises(RuntimeError, match="closed"):
         db.watch_changes("live")
+
+
+def test_bulk_mode_flush_and_rollback_publish_only_committed_events(tmp_path):
+    path = str(tmp_path / "factory")
+    with NexusDB(path) as db:
+        db.execute("CREATE TABLE devices (id INT, geom GEOMETRY)")
+        db.execute("CREATE CHANGEFEED live ON devices")
+        db.set_bulk_mode(True)
+        watcher = db.watch_changes("live")
+        db.bulk_insert("devices", ["id", "geom"], [(1, "POINT(1 1)")])
+        assert db.changes("live") == []
+        assert watcher.recv(timeout=0) is None
+        db.flush()
+        original = watcher.recv(timeout=0)
+        assert original["operation"] == "insert"
+        db.execute("BEGIN")
+        db.execute("UPDATE devices SET geom = ST_Point(2,2)")
+        db.flush()
+        assert watcher.recv(timeout=0) is None
+        db.execute("ROLLBACK")
+        db.flush()
+        assert watcher.recv(timeout=0) is None
+        del watcher
+    with NexusDB(path) as db:
+        assert db.changes("live") == [original]
+        assert db.query("SELECT * FROM devices").rows == [{"id": 1, "geom": "POINT(1 1)"}]
+
+
+def test_invalid_bulk_autocommit_has_no_partial_rows_or_events_after_reopen(tmp_path):
+    path = str(tmp_path / "factory")
+    with NexusDB(path) as db:
+        db.execute("CREATE TABLE devices (id INT, geom GEOMETRY)")
+        db.execute("CREATE CHANGEFEED live ON devices")
+        with pytest.raises(RuntimeError):
+            db.bulk_insert("devices", ["id", "geom"], [(1, "POINT(1 1)"), (2, "bad geometry")])
+        assert db.changes("live") == []
+        assert db.query("SELECT * FROM devices").rows == []
+        db.bulk_insert("devices", ["id", "geom"], [(3, "POINT(3 3)")])
+    with NexusDB(path) as db:
+        event, = db.changes("live")
+        assert (event["sequence"], event["row_id"]) == (1, 1)
+        assert event["new"] == {"id": 3, "geom": "POINT(3 3)"}

@@ -237,6 +237,11 @@ impl WriteAheadLog {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn inject_write_failure(&mut self, path: &Path) {
+        self.file = File::open(path).expect("read-only WAL fault injection");
+    }
+
     /// Caller MUST sync the main database before resetting a nonempty log.
     pub(crate) fn reset(&mut self) -> Result<()> {
         self.reset_with(&mut |_| {})

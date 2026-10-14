@@ -1,5 +1,4 @@
 use super::{ChangeEvent, FeedKind, Operation, Zone};
-use crate::query::Statement;
 use crate::storage::Table;
 use crate::types::{Row, Value};
 use crate::Result;
@@ -31,9 +30,9 @@ impl Snapshot {
 
     /// UPDATE preserves vector positions. Other DML preserves unchanged rows;
     /// matching a multiset also handles INSERT OR REPLACE and duplicate rows.
-    pub fn capture(&mut self, statement: &Statement, table: &Table) -> Result<Vec<ChangeEvent>> {
+    pub fn capture(&mut self, preserve_positions: bool, table: &Table) -> Result<Vec<ChangeEvent>> {
         let mut changes = Vec::new();
-        if matches!(statement, Statement::Update { .. }) {
+        if preserve_positions {
             for ((old, new), id) in self.rows.iter().zip(&table.rows).zip(&self.identities.ids) {
                 if old != new {
                     changes.push(ChangeEvent::row(&table.name, *id, Some(old), Some(new)));
@@ -85,7 +84,7 @@ impl Snapshot {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Pending {
     pub before: BTreeMap<String, Snapshot>,
     pub changes: Vec<ChangeEvent>,

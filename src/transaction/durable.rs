@@ -10,26 +10,34 @@ use crate::storage::Table;
 use crate::types::{ResultSet, Row, Value};
 use crate::{NexusError, Result};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub(crate) struct DurableExecutor {
     executor: Executor,
-    disk: DiskStorage,
+    disk: Arc<DiskStorage>,
+    changefeeds: crate::changefeed::Changefeeds,
     active: bool,
     dirty: HashSet<String>,
 }
 
 impl DurableExecutor {
     pub fn new(path: &str, is_memory: bool) -> Result<Self> {
-        let disk = DiskStorage::new(if is_memory { ":memory:" } else { path })?;
+        let disk = Arc::new(DiskStorage::new(if is_memory { ":memory:" } else { path })?);
         let mut executor = Executor::new();
         for name in disk.list_tables()? {
+            if name == crate::changefeed::LOG_TABLE {
+                continue;
+            }
             if let Some(table) = disk.load_table(&name)? {
                 executor.get_tables_mut().insert(name, table);
             }
         }
+        let changefeeds =
+            crate::changefeed::Changefeeds::open(disk.clone(), executor.get_tables())?;
         Ok(Self {
             executor,
             disk,
+            changefeeds,
             active: false,
             dirty: HashSet::new(),
         })
@@ -39,18 +47,30 @@ impl DurableExecutor {
         self.executor.get_tables()
     }
 
+    pub fn changefeeds(&self) -> crate::changefeed::Changefeeds {
+        self.changefeeds.clone()
+    }
+
     pub fn execute(
         &mut self,
         statement: &Statement,
         params: &QueryParams,
         bulk: bool,
     ) -> Result<ResultSet> {
-        if self.disk.is_memory() {
-            return self.executor.execute(statement, params);
+        self.changefeeds.validate_statement(statement)?;
+        if let Statement::Changefeed(command) = statement {
+            if !self.active {
+                self.commit_dirty()?;
+            }
+            self.changefeeds
+                .manage(command, self.get_tables(), self.active)?;
+            return Ok(ResultSet::empty());
         }
-        if let Statement::Pragma { name, value } = statement {
-            if let Some(result) = self.pragma(name, value.as_deref())? {
-                return Ok(result);
+        if !self.disk.is_memory() {
+            if let Statement::Pragma { name, value } = statement {
+                if let Some(result) = self.pragma(name, value.as_deref())? {
+                    return Ok(result);
+                }
             }
         }
         if let Statement::Transaction { operation } = statement {
@@ -61,6 +81,7 @@ impl DurableExecutor {
                     self.commit_dirty()?;
                     let result = self.executor.execute(statement, params)?;
                     self.active = true;
+                    self.changefeeds.begin_transaction();
                     return Ok(result);
                 }
                 TransactionOp::Commit if self.active => {
@@ -69,12 +90,14 @@ impl DurableExecutor {
                     self.commit_dirty()?;
                     let result = self.executor.execute(statement, params)?;
                     self.active = false;
+                    self.changefeeds.end_transaction();
                     return Ok(result);
                 }
                 TransactionOp::Rollback if self.active => {
                     let result = self.executor.execute(statement, params)?;
                     self.dirty.clear();
                     self.active = false;
+                    self.changefeeds.rollback();
                     return Ok(result);
                 }
                 _ => return self.executor.execute(statement, params),
@@ -94,7 +117,12 @@ impl DurableExecutor {
         match self.executor.execute(statement, params) {
             Ok(result) => {
                 if let Some(name) = touched {
-                    self.finish_write(name, before, bulk)?;
+                    self.finish_write(
+                        name,
+                        before,
+                        bulk,
+                        matches!(statement, Statement::Update { .. }),
+                    )?;
                 }
                 Ok(result)
             }
@@ -137,22 +165,40 @@ impl DurableExecutor {
             table.coerce_values(&mut values)?;
             prepared.push(Row::new(table.columns.clone(), values));
         }
-        let before = (!self.disk.is_memory() && !self.active && !bulk).then(|| table.clone());
+        let before = (self.changefeeds.enabled()
+            || (!self.disk.is_memory() && !self.active && !bulk))
+            .then(|| table.clone());
         let count = prepared.len();
         table.rows.reserve(count);
         // Batch insert so geometry GiST indexes bulk-load instead of inserting one by one.
         table.insert_batch(prepared);
-        if !self.disk.is_memory() {
-            self.finish_write(name, before, bulk)?;
-        }
+        self.finish_write(name, before, bulk, false)?;
         Ok(count)
     }
 
-    fn finish_write(&mut self, name: &str, before: Option<Table>, bulk: bool) -> Result<()> {
+    fn finish_write(
+        &mut self,
+        name: &str,
+        before: Option<Table>,
+        bulk: bool,
+        preserve_positions: bool,
+    ) -> Result<()> {
+        let capture =
+            match self
+                .changefeeds
+                .capture_table(name, preserve_positions, self.get_tables())
+            {
+                Ok(capture) => capture,
+                Err(error) => {
+                    self.restore(name, before);
+                    return Err(error);
+                }
+            };
         let already_dirty = !self.dirty.insert(name.into());
         if !self.active && !bulk {
             if let Err(error) = self.commit_dirty() {
                 self.restore(name, before);
+                self.changefeeds.undo_capture(capture);
                 if !already_dirty {
                     self.dirty.remove(name);
                 }
@@ -171,6 +217,7 @@ impl DurableExecutor {
     }
 
     fn commit_dirty(&mut self) -> Result<()> {
+        let prepared = self.changefeeds.prepare_commit()?;
         let mut names: Vec<_> = self.dirty.iter().collect();
         names.sort();
         let mut tables = Vec::new();
@@ -182,7 +229,11 @@ impl DurableExecutor {
                 removed.push(name.clone());
             }
         }
+        if let Some(log) = prepared.table() {
+            tables.push(log);
+        }
         self.disk.commit_tables(&tables, &removed)?;
+        prepared.post_commit();
         self.dirty.clear();
         Ok(())
     }
@@ -205,6 +256,7 @@ impl DurableExecutor {
             )?;
             self.active = false;
             self.dirty.clear();
+            self.changefeeds.rollback();
         }
         self.flush()
     }
@@ -257,5 +309,164 @@ impl DurableExecutor {
             vec![name],
             vec![result],
         )])))
+    }
+}
+
+#[cfg(test)]
+mod changefeed_tests {
+    use super::*;
+    use crate::changefeed::{ChangeEvent, Operation};
+    use crate::query::QueryParser;
+    use crate::storage::disk::WAL_FILE_NAME;
+
+    fn sql(engine: &mut DurableExecutor, sql: &str) -> Result<ResultSet> {
+        engine.execute(&QueryParser::parse(sql)?, &QueryParams::default(), false)
+    }
+
+    fn seed(path: &str) -> DurableExecutor {
+        let mut engine = DurableExecutor::new(path, false).unwrap();
+        sql(&mut engine, "CREATE TABLE devices (id INT, geom GEOMETRY)").unwrap();
+        sql(&mut engine, "CREATE TABLE zones (code TEXT, geom GEOMETRY)").unwrap();
+        sql(
+            &mut engine,
+            "INSERT INTO zones VALUES ('A', ST_MakeEnvelope(0,0,10,10))",
+        )
+        .unwrap();
+        sql(&mut engine, "CREATE CHANGEFEED edits ON devices").unwrap();
+        sql(
+            &mut engine,
+            "CREATE GEOFENCE occupancy ON devices(geom) ZONES zones(geom)",
+        )
+        .unwrap();
+        engine
+    }
+
+    fn insert(engine: &mut DurableExecutor, id: i64, bulk: bool) -> Result<usize> {
+        engine.bulk_insert(
+            "devices",
+            &["id".into(), "geom".into()],
+            vec![vec![Value::Integer(id), Value::Text("POINT(5 5)".into())]],
+            bulk,
+        )
+    }
+
+    #[test]
+    fn failed_bulk_autocommit_has_no_rows_events_or_consumed_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().to_str().unwrap();
+        {
+            let mut engine = seed(path);
+            let feeds = engine.changefeeds();
+            let mut stream = feeds.subscribe("occupancy", None).unwrap();
+            engine
+                .disk
+                .inject_wal_write_failure(&root.path().join(WAL_FILE_NAME));
+            assert!(insert(&mut engine, 1, false).is_err());
+            assert!(engine.get_tables()["devices"].rows.is_empty());
+            assert!(engine.dirty.is_empty());
+            assert!(feeds.changes("edits", None).unwrap().is_empty());
+            assert_eq!(feeds.latest_sequence(), 0);
+            assert!(stream.try_recv().unwrap().is_none());
+            assert!(feeds.prepare_commit().unwrap().table().is_none());
+        }
+        let mut engine = DurableExecutor::new(path, false).unwrap();
+        assert!(engine.get_tables()["devices"].rows.is_empty());
+        insert(&mut engine, 2, false).unwrap();
+        let event = engine
+            .changefeeds()
+            .changes("edits", None)
+            .unwrap()
+            .remove(0);
+        assert_eq!((event.sequence, event.row_id), (1, 1));
+        assert_eq!(event.operation, Operation::Insert);
+    }
+
+    #[test]
+    fn failed_commit_retains_transaction_until_silent_rollback() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().to_str().unwrap();
+        {
+            let mut engine = seed(path);
+            let feeds = engine.changefeeds();
+            let mut stream = feeds.subscribe("edits", None).unwrap();
+            sql(&mut engine, "BEGIN").unwrap();
+            insert(&mut engine, 1, false).unwrap();
+            engine
+                .disk
+                .inject_wal_write_failure(&root.path().join(WAL_FILE_NAME));
+            assert!(sql(&mut engine, "COMMIT").is_err());
+            assert!(engine.active);
+            assert_eq!(engine.get_tables()["devices"].rows.len(), 1);
+            assert!(stream.try_recv().unwrap().is_none());
+            sql(&mut engine, "ROLLBACK").unwrap();
+            assert!(!engine.active);
+            assert!(engine.get_tables()["devices"].rows.is_empty());
+            assert!(engine.dirty.is_empty());
+            assert!(stream.try_recv().unwrap().is_none());
+            assert!(feeds.prepare_commit().unwrap().table().is_none());
+        }
+        let engine = DurableExecutor::new(path, false).unwrap();
+        assert!(engine.get_tables()["devices"].rows.is_empty());
+        assert!(engine
+            .changefeeds()
+            .changes("edits", None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn failed_autocommit_preserves_earlier_deferred_capture_only() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = seed(root.path().to_str().unwrap());
+        insert(&mut engine, 1, true).unwrap();
+        engine
+            .disk
+            .inject_wal_write_failure(&root.path().join(WAL_FILE_NAME));
+        assert!(insert(&mut engine, 2, false).is_err());
+        assert_eq!(engine.get_tables()["devices"].rows.len(), 1);
+        assert!(engine.dirty.contains("devices"));
+        let feeds = engine.changefeeds();
+        assert!(feeds.changes("edits", None).unwrap().is_empty());
+        let prepared = feeds.prepare_commit().unwrap();
+        let rows = &prepared.table().unwrap().rows;
+        assert_eq!(rows.len(), 3); // metadata, insert 1, enter zone A
+        for row in &rows[1..] {
+            let Value::Blob(bytes) = &row.values[1] else {
+                panic!("event payload");
+            };
+            let event: ChangeEvent = bincode::deserialize(bytes).unwrap();
+            assert_eq!(event.row_id, 1);
+            assert_eq!(
+                event.new.as_ref().unwrap().get("id"),
+                Some(&Value::Integer(1))
+            );
+        }
+    }
+
+    #[test]
+    fn failed_sql_autocommit_restores_capture_and_indexes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = seed(root.path().to_str().unwrap());
+        insert(&mut engine, 1, false).unwrap();
+        sql(
+            &mut engine,
+            "CREATE INDEX devices_geom ON devices USING gist (geom)",
+        )
+        .unwrap();
+        let feeds = engine.changefeeds();
+        let cursor = feeds.latest_sequence();
+        engine
+            .disk
+            .inject_wal_write_failure(&root.path().join(WAL_FILE_NAME));
+        assert!(sql(&mut engine, "UPDATE devices SET geom = ST_Point(50,50)").is_err());
+        let rows = sql(
+            &mut engine,
+            "SELECT id FROM devices WHERE ST_Covers(ST_MakeEnvelope(0,0,10,10),geom)",
+        )
+        .unwrap();
+        assert_eq!(rows.rows.len(), 1);
+        assert!(feeds.changes("edits", Some(cursor)).unwrap().is_empty());
+        assert!(feeds.changes("occupancy", Some(cursor)).unwrap().is_empty());
+        assert!(feeds.prepare_commit().unwrap().table().is_none());
     }
 }

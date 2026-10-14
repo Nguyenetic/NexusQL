@@ -47,9 +47,6 @@ impl ChangeSubscription {
         let shared = &self.feeds.shared;
         let mut state = shared.state.lock().unwrap();
         loop {
-            if let Some(failure) = &state.failure {
-                return Err(error(failure.clone()));
-            }
             let definition = state
                 .journal
                 .validate_cursor(&self.feed, Some(self.cursor))?;

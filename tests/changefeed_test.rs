@@ -594,3 +594,261 @@ async fn measured_kfm_batch_has_exact_counts_and_a_bounded_log() {
         elapsed.as_secs_f64() * 1000.0
     );
 }
+
+#[tokio::test]
+async fn bulk_mode_publishes_only_at_flush_or_commit_and_flush_never_commits_begin() {
+    let root = tempfile::tempdir().unwrap();
+    for path in [
+        ":memory:".to_string(),
+        root.path().to_str().unwrap().to_string(),
+    ] {
+        let db = NexusSQL::new(&path).await.unwrap();
+        db.execute("CREATE TABLE devices (id INT, geom GEOMETRY)")
+            .await
+            .unwrap();
+        db.execute("CREATE CHANGEFEED f ON devices").await.unwrap();
+        let mut stream = db.subscribe("f", None).unwrap();
+        db.set_bulk_mode(true).await;
+        db.execute("INSERT INTO devices VALUES (1, 'POINT(1 1)')")
+            .await
+            .unwrap();
+        assert!(stream.try_recv().unwrap().is_none());
+        assert_eq!(db.changefeeds().latest_sequence(), 0);
+        db.flush().await.unwrap();
+        assert_eq!(stream.recv().unwrap().operation, Operation::Insert);
+        db.execute("BEGIN").await.unwrap();
+        db.execute("UPDATE devices SET geom = ST_Point(2,2)")
+            .await
+            .unwrap();
+        db.flush().await.unwrap();
+        assert!(stream.try_recv().unwrap().is_none());
+        db.execute("ROLLBACK").await.unwrap();
+        db.flush().await.unwrap();
+        assert!(stream.try_recv().unwrap().is_none());
+        db.execute("BEGIN").await.unwrap();
+        db.execute("UPDATE devices SET geom = ST_Point(3,3)")
+            .await
+            .unwrap();
+        db.execute("COMMIT").await.unwrap();
+        assert_eq!(stream.recv().unwrap().operation, Operation::Update);
+        assert_eq!(db.changes("f", None).unwrap().len(), 2);
+        drop(stream);
+        db.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_bulk_validation_does_not_leak_into_later_commit_on_disk() {
+    let root = tempfile::tempdir().unwrap();
+    let db = NexusSQL::new(root.path().to_str().unwrap()).await.unwrap();
+    db.execute("CREATE TABLE devices (id INT, geom GEOMETRY)")
+        .await
+        .unwrap();
+    db.execute("CREATE CHANGEFEED f ON devices").await.unwrap();
+    let mut stream = db.subscribe("f", None).unwrap();
+    let columns = vec!["id".into(), "geom".into()];
+    for transactional in [false, true] {
+        if transactional {
+            db.execute("BEGIN").await.unwrap();
+        }
+        assert!(db
+            .bulk_insert(
+                "devices",
+                &columns,
+                vec![
+                    Value::Integer(1),
+                    Value::Text("POINT(1 1)".into()),
+                    Value::Integer(2),
+                    Value::Text("invalid geometry".into()),
+                ],
+                2
+            )
+            .await
+            .is_err());
+        assert!(stream.try_recv().unwrap().is_none());
+        assert!(db
+            .execute("SELECT * FROM devices")
+            .await
+            .unwrap()
+            .rows
+            .is_empty());
+        if transactional {
+            db.execute("ROLLBACK").await.unwrap();
+        }
+    }
+    db.bulk_insert(
+        "devices",
+        &columns,
+        vec![Value::Integer(3), Value::Text("POINT(3 3)".into())],
+        1,
+    )
+    .await
+    .unwrap();
+    let event = stream.recv().unwrap();
+    assert_eq!((event.sequence, event.row_id), (1, 1));
+    assert_eq!(value(&event, "id"), &Value::Integer(3));
+    drop(stream);
+    db.shutdown().await.unwrap();
+    let db = NexusSQL::new(root.path().to_str().unwrap()).await.unwrap();
+    assert_eq!(db.changes("f", None).unwrap(), vec![event]);
+    db.shutdown().await.unwrap();
+}
+
+// Child exits without Drop/checkpoint, leaving only the acknowledged WAL prefix.
+#[test]
+fn changefeed_wal_child() {
+    let Ok(path) = std::env::var("NEXUSQL_CHANGEFEED_WAL_CHILD") else {
+        return;
+    };
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let db = NexusSQL::new(&path).await.unwrap();
+        db.execute("PRAGMA nexusql_wal_checkpoint_bytes = 0").await.unwrap();
+        db.execute("CREATE TABLE devices (id INT, geom GEOMETRY)").await.unwrap();
+        db.execute("CREATE TABLE cameras (id INT, device_id INT)").await.unwrap();
+        db.execute("CREATE TABLE zones (code TEXT, geom GEOMETRY)").await.unwrap();
+        db.execute("INSERT INTO zones VALUES ('A', ST_MakeEnvelope(0,0,10,10)), ('B', ST_MakeEnvelope(10,0,20,10))").await.unwrap();
+        db.execute("CREATE CHANGEFEED f ON devices, cameras").await.unwrap();
+        db.execute("CREATE GEOFENCE occupancy ON devices(geom) ZONES zones(geom)").await.unwrap();
+        db.execute("INSERT INTO devices VALUES (1, 'POINT(5 5)')").await.unwrap();
+        let cursor = db.changefeeds().latest_sequence();
+        let wal_path = std::path::Path::new(&path).join("default").join(nexusql::storage::disk::WAL_FILE_NAME);
+        let prefix = std::fs::metadata(wal_path).unwrap().len();
+        db.execute("BEGIN").await.unwrap();
+        db.execute("UPDATE devices SET geom = ST_Point(15,5)").await.unwrap();
+        db.execute("INSERT INTO cameras VALUES (101, 1)").await.unwrap();
+        db.execute("COMMIT").await.unwrap();
+        let committed = db.changefeeds().latest_sequence();
+        // These direct bulk and zone edits must never enter the WAL or feed log.
+        db.execute("BEGIN").await.unwrap();
+        db.bulk_insert("devices", &["id".into(), "geom".into()], vec![Value::Integer(2), Value::Text("POINT(5 5)".into())], 1).await.unwrap();
+        db.execute("UPDATE zones SET geom = ST_MakeEnvelope(50,50,60,60)").await.unwrap();
+        assert_eq!(db.changefeeds().latest_sequence(), committed);
+        std::fs::write(std::path::Path::new(&path).join("prefix"), format!("{prefix},{cursor}")).unwrap();
+        std::process::exit(0);
+    });
+}
+
+#[test]
+fn data_and_events_recover_together_from_one_wal_commit() {
+    use nexusql::storage::disk::WAL_FILE_NAME;
+    use nexusql::storage::wal::{SyncPolicy, WriteAheadLog, FRAME_HEADER_LEN};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+
+    let source = tempfile::tempdir().unwrap();
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "changefeed_wal_child", "--nocapture"])
+        .env("NEXUSQL_CHANGEFEED_WAL_CHILD", source.path())
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+    let prefix = fs::read_to_string(source.path().join("prefix")).unwrap();
+    let (prefix, cursor) = prefix.split_once(',').unwrap();
+    let prefix: usize = prefix.parse().unwrap();
+    let cursor: u64 = cursor.parse().unwrap();
+    let bytes = fs::read(source.path().join("default").join(WAL_FILE_NAME)).unwrap();
+
+    // Inspect the actual redo payload, not just the final recovered tables:
+    // device + camera + feed-log keys must share one and only one new commit.
+    let copy = tempfile::tempdir().unwrap();
+    let copy_path = copy.path().join(WAL_FILE_NAME);
+    fs::write(&copy_path, &bytes[..prefix]).unwrap();
+    let (wal, before) = WriteAheadLog::open(&copy_path, SyncPolicy::Full).unwrap();
+    drop(wal);
+    fs::write(&copy_path, &bytes).unwrap();
+    let (wal, after) = WriteAheadLog::open(&copy_path, SyncPolicy::Full).unwrap();
+    drop(wal);
+    assert_eq!(after.len(), before.len() + 1);
+    let changes: BTreeMap<Vec<u8>, Option<Vec<u8>>> =
+        bincode::deserialize(after.last().unwrap()).unwrap();
+    for name in ["devices", "cameras", nexusql::changefeed::LOG_TABLE] {
+        assert!(changes.contains_key(format!("table:{name}:meta").as_bytes()));
+    }
+
+    // Check both sides of every frame/payload boundary and every byte of the
+    // final commit marker. The WAL module separately exhausts all payload cuts.
+    let mut cuts = BTreeSet::from([prefix, bytes.len()]);
+    let mut offset = prefix;
+    while offset < bytes.len() {
+        let payload =
+            u32::from_le_bytes(bytes[offset + 16..offset + 20].try_into().unwrap()) as usize;
+        let end = offset + FRAME_HEADER_LEN + ((payload + 7) & !7);
+        for cut in [
+            offset,
+            offset + 1,
+            offset + FRAME_HEADER_LEN - 1,
+            offset + FRAME_HEADER_LEN,
+            end - 1,
+            end,
+        ] {
+            cuts.insert(cut);
+        }
+        if payload == 0 {
+            cuts.extend(offset..end);
+        }
+        offset = end;
+    }
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for cut in cuts {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("default")).unwrap();
+        fs::write(
+            root.path().join("default").join(WAL_FILE_NAME),
+            &bytes[..cut],
+        )
+        .unwrap();
+        runtime.block_on(async {
+            let db = NexusSQL::new(root.path().to_str().unwrap()).await.unwrap();
+            let complete = cut == bytes.len();
+            let rows = db
+                .execute("SELECT id, ST_AsText(geom) AS geom FROM devices")
+                .await
+                .unwrap()
+                .rows;
+            assert_eq!(rows.len(), 1, "uncommitted row at cut {cut}");
+            assert_eq!(
+                rows[0].get("geom"),
+                Some(&Value::Text(
+                    if complete {
+                        "POINT(15 5)"
+                    } else {
+                        "POINT(5 5)"
+                    }
+                    .into()
+                ))
+            );
+            assert_eq!(
+                db.execute("SELECT * FROM cameras")
+                    .await
+                    .unwrap()
+                    .rows
+                    .len(),
+                usize::from(complete)
+            );
+            let edits = db.changes("f", Some(cursor)).unwrap();
+            let occupancy = db.changes("occupancy", Some(cursor)).unwrap();
+            if complete {
+                assert_eq!(
+                    operations(&edits),
+                    vec![Operation::Update, Operation::Insert]
+                );
+                assert_eq!(
+                    operations(&occupancy),
+                    vec![Operation::Exit, Operation::Enter]
+                );
+                assert_eq!(edits[0].commit_sequence, occupancy[1].commit_sequence);
+                assert_eq!(zone(&occupancy[0]), &Value::Text("A".into()));
+                assert_eq!(zone(&occupancy[1]), &Value::Text("B".into()));
+            } else {
+                assert!(edits.is_empty(), "orphan row event at cut {cut}");
+                assert!(occupancy.is_empty(), "orphan geofence event at cut {cut}");
+                assert_eq!(db.changefeeds().latest_sequence(), cursor);
+            }
+            db.shutdown().await.unwrap();
+        });
+    }
+}
