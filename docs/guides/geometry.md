@@ -236,3 +236,54 @@ editing/validity edge cases against GEOS 3.14.1 references, aggregate union, and
 GeoJSON round trips. The reference coordinates are embedded constants; running
 the tests requires no
 Python, PROJ installation, or external service.
+
+## Indexed nearest-neighbor queries
+
+Use the PostGIS-style `<->` operator with an ascending `ORDER BY` and `LIMIT`
+to find the closest indexed geometries:
+
+```sql
+CREATE TABLE switch_closets (name TEXT, in_service BOOLEAN, geom GEOMETRY);
+CREATE INDEX closets_geom ON switch_closets USING gist (geom);
+
+-- $1 and $2 are the camera's map coordinates.
+SELECT name, geom <-> ST_Point($1, $2) AS distance
+FROM switch_closets
+WHERE in_service = true
+ORDER BY geom <-> ST_Point($1, $2)
+LIMIT 5;
+```
+
+For geometry operands, `<->` returns exactly the same planar distance as
+`ST_Distance`, including its SRID checks and NULL behavior. It also works in
+SELECT expressions and WHERE predicates. Its existing vector-distance meaning
+is preserved for vector operands. `ORDER BY distance` using a SELECT alias,
+qualified columns, and reversed operands can also use the geometry index.
+The other operand must be independent of the scanned row; literals, parameters,
+casts, and expressions such as `ST_Centroid(...)` are supported. It may be a
+point, line, or polygon.
+
+The scan pulls candidates lazily from rstar's nearest-neighbor iterator and
+checks distances against the original geometries, including polygon holes.
+For a query shape larger than a point, a circle enclosing its bounds supplies
+a conservative stopping bound. Bounding-box or center distances never decide
+the returned order. The scan keeps the best k exact matches and continues past
+rows rejected by WHERE until enough matches are found or the index is exhausted.
+Candidates that could tie the kth distance are checked too; equal distances
+retain the same table-row order as the unindexed stable sort.
+
+Without a geometry GiST index or a LIMIT, execution uses the full sort.
+Descending order, row-dependent query geometries, joins, grouping, aggregate or
+window queries, and WHERE subqueries also retain their existing execution path.
+Tables containing NULL/empty geometries or mixed SRIDs, and targets with an
+incompatible SRID or no geometry bounds, fall back to preserve existing NULL
+sorting behavior. `ORDER BY ST_Distance(...)` continues to use the full sort.
+Selective filters, many ties, or widely overlapping bounds can require visiting
+most or all indexed entries.
+
+`GiSTIndex::stats().search_count` includes KNN scans; `candidates_returned` counts
+entries actually pulled, including a stopping lookahead. The KNN tests compare
+indexed results with both the unindexed operator and `ST_Distance` over 10,000
+seeded random points and polygons (including holes), for k = 1, 5, and 50, with
+and without WHERE. Four query shapes produce 24 comparisons, each asserting one
+index search and fewer than 2,500 candidate visits.

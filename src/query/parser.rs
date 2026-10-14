@@ -11,8 +11,9 @@ use crate::query::ast::{
 use crate::types::Value;
 use crate::{NexusError, Result};
 use sqlparser::ast as sql_ast;
-use sqlparser::dialect::Dialect;
-use sqlparser::parser::Parser as SqlParser;
+use sqlparser::dialect::{Dialect, Precedence};
+use sqlparser::parser::{Parser as SqlParser, ParserError};
+use sqlparser::tokenizer::Token;
 
 /// NexusQL Custom SQL Dialect
 ///
@@ -50,6 +51,43 @@ impl Dialect for NexusQLDialect {
 
     fn is_delimited_identifier_start(&self, ch: char) -> bool {
         ch == '"' || ch == '`' // Support both PostgreSQL and SQLite quotes
+    }
+
+    fn get_next_precedence(
+        &self,
+        parser: &SqlParser,
+    ) -> Option<std::result::Result<u8, ParserError>> {
+        // The tokenizer emits <-> as Lt, Arrow. Recognize just this pair so
+        // comparisons against negative numbers (e.g. x<-1) keep their meaning.
+        if parser.peek_token().token == Token::Lt && parser.peek_nth_token(1).token == Token::Arrow
+        {
+            // PostgreSQL custom operators bind below arithmetic, above comparisons.
+            Some(Ok(self.prec_value(Precedence::PlusMinus) - 1))
+        } else {
+            None
+        }
+    }
+
+    fn parse_infix(
+        &self,
+        parser: &mut SqlParser,
+        expr: &sql_ast::Expr,
+        precedence: u8,
+    ) -> Option<std::result::Result<sql_ast::Expr, ParserError>> {
+        if let Err(error) = self.get_next_precedence(parser)? {
+            return Some(Err(error));
+        }
+        parser.next_token();
+        parser.next_token();
+        Some(
+            parser
+                .parse_subexpr(precedence)
+                .map(|right| sql_ast::Expr::BinaryOp {
+                    left: Box::new(expr.clone()),
+                    op: sql_ast::BinaryOperator::Custom("<->".into()),
+                    right: Box::new(right),
+                }),
+        )
     }
 }
 
@@ -1256,6 +1294,7 @@ impl QueryParser {
 
     fn convert_expr_to_ast(&self, expr: &sql_ast::Expr) -> Result<Expr> {
         match expr {
+            sql_ast::Expr::Nested(inner) => self.convert_expr_to_ast(inner),
             // Column reference
             sql_ast::Expr::Identifier(ident) => {
                 // Check if this is a named parameter (:name)

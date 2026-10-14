@@ -116,3 +116,128 @@ pub(super) fn candidates(
     }
     None
 }
+
+/// Ascending <-> LIMIT on a single indexed geometry column. Keep at most k
+/// exact distances, using row offsets to preserve the stable full sort's ties.
+pub(super) fn knn_rows(
+    table: &Table,
+    from: &crate::query::ast::FromClause,
+    expr: &Expr,
+    limit: usize,
+    filter: Option<&Expr>,
+    params: &QueryParams,
+) -> Option<Vec<Row>> {
+    use crate::types::Value;
+    use geo::{Distance, Euclidean};
+    use ordered_float::OrderedFloat;
+    use std::collections::BinaryHeap;
+
+    let Expr::BinaryOp {
+        left,
+        op: BinaryOperator::L2Distance,
+        right,
+    } = expr
+    else {
+        return None;
+    };
+    let outer = Row::new(vec![], vec![]);
+    let (column, target, reversed) = match (&**left, &**right) {
+        (Expr::Column(column), target) if available(target, &outer) => (column, target, false),
+        (target, Expr::Column(column)) if available(target, &outer) => (column, target, true),
+        _ => return None,
+    };
+    let target = evaluate_expr(&outer, target, params);
+    let query = geometry(&target)?;
+    let bounds = query.bounds()?;
+    let qualifier = from.alias.as_deref().unwrap_or(&from.table);
+    let index = table.typed_indexes.values().find_map(|index| {
+        let IndexType::GiST(index) = index else {
+            return None;
+        };
+        ((column == &index.column_name || column == &format!("{qualifier}.{}", index.column_name))
+            && index.supports_knn(query.srid, table.rows.len()))
+        .then_some(index)
+    })?;
+
+    // rstar's iterator accepts a point. A circle around the query's bounding
+    // rectangle covers any query shape: distance(box, center) - radius is a
+    // conservative, monotonic lower bound on the exact geometry distance.
+    let center = [
+        bounds.min().x * 0.5 + bounds.max().x * 0.5,
+        bounds.min().y * 0.5 + bounds.max().y * 0.5,
+    ];
+    let radius = (bounds.max().x - center[0])
+        .abs()
+        .max((bounds.min().x - center[0]).abs())
+        .hypot(
+            (bounds.max().y - center[1])
+                .abs()
+                .max((bounds.min().y - center[1]).abs()),
+        );
+    if !radius.is_finite() {
+        return None;
+    }
+    let neighbors = index.nearest_neighbors(center);
+    if limit == 0 {
+        return Some(vec![]);
+    }
+    let mut best: BinaryHeap<(OrderedFloat<f64>, usize)> = BinaryHeap::new();
+    for (id, distance_2) in neighbors {
+        if best.len() == limit {
+            let worst = best.peek()?.0.into_inner();
+            let bound = distance_2.sqrt();
+            // Roundoff may only cause extra work, never exclude a boundary tie.
+            // Overflowed squared bounds cannot justify pruning either.
+            let tolerance = 32.0
+                * f64::EPSILON
+                * center[0]
+                    .abs()
+                    .max(center[1].abs())
+                    .max(radius)
+                    .max(bound)
+                    .max(worst)
+                    .max(1.0);
+            if bound.is_finite() && bound > worst + radius + tolerance {
+                break;
+            }
+        }
+        let row = table.rows.get(id)?;
+        if let Some(filter) = filter {
+            let qualified;
+            let filter_row = if from.alias.is_some() {
+                qualified = qualify(row, qualifier);
+                &qualified
+            } else {
+                row
+            };
+            if !crate::query::evaluator::evaluate_where(filter_row, filter, params) {
+                continue;
+            }
+        }
+        let Value::Geometry(g) = row.get(&index.column_name)? else {
+            return None;
+        };
+        // Keep the SQL operand order even for floating-point geometry algorithms.
+        let distance = if reversed {
+            Euclidean.distance(query.shape(), g.shape())
+        } else {
+            Euclidean.distance(g.shape(), query.shape())
+        };
+        if !distance.is_finite() {
+            return None;
+        }
+        let candidate = (OrderedFloat(distance), id);
+        if best.len() < limit {
+            best.push(candidate);
+        } else if best.peek().is_some_and(|worst| candidate < *worst) {
+            best.pop();
+            best.push(candidate);
+        }
+    }
+    Some(
+        best.into_sorted_vec()
+            .into_iter()
+            .map(|(_, id)| table.rows[id].clone())
+            .collect(),
+    )
+}
