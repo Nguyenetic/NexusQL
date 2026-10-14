@@ -7,23 +7,23 @@
 //! - PARTITION BY with window functions
 //! - Real-world analytics scenarios
 
-use nexus::aggregate::AggregateManager;
-use nexus::error::Result;
-use nexus::types::{Row, Value};
-use nexus::window::{FrameBound, FrameType, WindowFrame, WindowManager, WindowSpec};
+use nexusql::aggregate::AggregateManager;
+use nexusql::types::{Row, Value};
+use nexusql::window::{WindowManager, WindowSpec};
+use nexusql::Result;
 
 fn main() -> Result<()> {
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!("NexusQL Week 13 Analytics Demo");
     println!("Aggregate Functions • Window Functions • Advanced Analytics");
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!();
 
     // ========================================================================
     // 1. AGGREGATE FUNCTIONS - Data Summarization
     // ========================================================================
     println!("📊 1. AGGREGATE FUNCTIONS - Data Summarization");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     let agg_manager = AggregateManager::new();
 
@@ -77,16 +77,34 @@ fn main() -> Result<()> {
     // 2. GROUP BY Aggregations
     // ========================================================================
     println!("📈 2. GROUP BY AGGREGATIONS - Grouped Statistics");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     // Sales by region: (region, amount)
     let regional_sales = vec![
-        Row::new(vec![], vec![Value::Text("North".to_string()), Value::Integer(1000)]),
-        Row::new(vec![], vec![Value::Text("South".to_string()), Value::Integer(1500)]),
-        Row::new(vec![], vec![Value::Text("North".to_string()), Value::Integer(1200)]),
-        Row::new(vec![], vec![Value::Text("East".to_string()), Value::Integer(800)]),
-        Row::new(vec![], vec![Value::Text("South".to_string()), Value::Integer(1800)]),
-        Row::new(vec![], vec![Value::Text("East".to_string()), Value::Integer(900)]),
+        Row::new(
+            vec![],
+            vec![Value::Text("North".to_string()), Value::Integer(1000)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("South".to_string()), Value::Integer(1500)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("North".to_string()), Value::Integer(1200)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("East".to_string()), Value::Integer(800)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("South".to_string()), Value::Integer(1800)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("East".to_string()), Value::Integer(900)],
+        ),
     ];
 
     println!("  Regional Sales Data:");
@@ -119,22 +137,28 @@ fn main() -> Result<()> {
     // 3. WINDOW FUNCTIONS - Row-Level Analytics
     // ========================================================================
     println!("🪟 3. WINDOW FUNCTIONS - Row-Level Analytics");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     let window_mgr = WindowManager::new();
 
     // Employee salary data
     let salaries = vec![
-        Row::new(vec![], vec![
-            Value::Text("Alice".to_string()),
-            Value::Integer(75000),
-        ]),
-        Row::new(vec![], vec![Value::Text("Bob".to_string()), Value::Integer(65000)]),
-        Row::new(vec![], vec![
-            Value::Text("Carol".to_string()),
-            Value::Integer(80000),
-        ]),
-        Row::new(vec![], vec![Value::Text("Dave".to_string()), Value::Integer(70000)]),
+        Row::new(
+            vec![],
+            vec![Value::Text("Alice".to_string()), Value::Integer(75000)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Bob".to_string()), Value::Integer(65000)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Carol".to_string()), Value::Integer(80000)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Dave".to_string()), Value::Integer(70000)],
+        ),
     ];
 
     println!("  Employee Salaries:");
@@ -148,7 +172,7 @@ fn main() -> Result<()> {
     let row_numbers = window_mgr.execute_window_function("ROW_NUMBER", &salaries, &spec, None)?;
 
     println!("  ROW_NUMBER() - Sequential numbering:");
-    for (i, (row, num)) in salaries.iter().zip(row_numbers.iter()).enumerate() {
+    for (row, num) in salaries.iter().zip(row_numbers.iter()) {
         println!("    {} - Row {}", row.values[0], num);
     }
 
@@ -158,15 +182,30 @@ fn main() -> Result<()> {
     // 4. RANKING FUNCTIONS
     // ========================================================================
     println!("🏆 4. RANKING FUNCTIONS - RANK vs DENSE_RANK");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     // Test scores with ties
     let test_scores = vec![
-        Row::new(vec![], vec![Value::Text("Alice".to_string()), Value::Integer(95)]),
-        Row::new(vec![], vec![Value::Text("Bob".to_string()), Value::Integer(87)]),
-        Row::new(vec![], vec![Value::Text("Carol".to_string()), Value::Integer(95)]),
-        Row::new(vec![], vec![Value::Text("Dave".to_string()), Value::Integer(82)]),
-        Row::new(vec![], vec![Value::Text("Eve".to_string()), Value::Integer(90)]),
+        Row::new(
+            vec![],
+            vec![Value::Text("Alice".to_string()), Value::Integer(95)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Bob".to_string()), Value::Integer(87)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Carol".to_string()), Value::Integer(95)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Dave".to_string()), Value::Integer(82)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Eve".to_string()), Value::Integer(90)],
+        ),
     ];
 
     println!("  Test Scores:");
@@ -200,15 +239,30 @@ fn main() -> Result<()> {
     // 5. LAG and LEAD - Time Series Analysis
     // ========================================================================
     println!("📉 5. LAG & LEAD - Time Series Analysis");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     // Stock prices over time
     let stock_prices = vec![
-        Row::new(vec![], vec![Value::Text("Day 1".to_string()), Value::Integer(100)]),
-        Row::new(vec![], vec![Value::Text("Day 2".to_string()), Value::Integer(105)]),
-        Row::new(vec![], vec![Value::Text("Day 3".to_string()), Value::Integer(102)]),
-        Row::new(vec![], vec![Value::Text("Day 4".to_string()), Value::Integer(108)]),
-        Row::new(vec![], vec![Value::Text("Day 5".to_string()), Value::Integer(110)]),
+        Row::new(
+            vec![],
+            vec![Value::Text("Day 1".to_string()), Value::Integer(100)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Day 2".to_string()), Value::Integer(105)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Day 3".to_string()), Value::Integer(102)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Day 4".to_string()), Value::Integer(108)],
+        ),
+        Row::new(
+            vec![],
+            vec![Value::Text("Day 5".to_string()), Value::Integer(110)],
+        ),
     ];
 
     println!("  Stock Prices:");
@@ -251,30 +305,42 @@ fn main() -> Result<()> {
     // 6. PARTITION BY - Grouped Window Functions
     // ========================================================================
     println!("🗂️  6. PARTITION BY - Grouped Window Functions");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     // Sales by department and employee
     let dept_sales = vec![
-        Row::new(vec![], vec![
-            Value::Text("Sales".to_string()),
-            Value::Text("Alice".to_string()),
-            Value::Integer(50000),
-        ]),
-        Row::new(vec![], vec![
-            Value::Text("Sales".to_string()),
-            Value::Text("Bob".to_string()),
-            Value::Integer(45000),
-        ]),
-        Row::new(vec![], vec![
-            Value::Text("Engineering".to_string()),
-            Value::Text("Carol".to_string()),
-            Value::Integer(70000),
-        ]),
-        Row::new(vec![], vec![
-            Value::Text("Engineering".to_string()),
-            Value::Text("Dave".to_string()),
-            Value::Integer(65000),
-        ]),
+        Row::new(
+            vec![],
+            vec![
+                Value::Text("Sales".to_string()),
+                Value::Text("Alice".to_string()),
+                Value::Integer(50000),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Text("Sales".to_string()),
+                Value::Text("Bob".to_string()),
+                Value::Integer(45000),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Text("Engineering".to_string()),
+                Value::Text("Carol".to_string()),
+                Value::Integer(70000),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Text("Engineering".to_string()),
+                Value::Text("Dave".to_string()),
+                Value::Integer(65000),
+            ],
+        ),
     ];
 
     println!("  Department Sales:");
@@ -308,40 +374,55 @@ fn main() -> Result<()> {
     // 7. REAL-WORLD SCENARIO - E-Commerce Analytics
     // ========================================================================
     println!("🌟 7. REAL-WORLD SCENARIO - E-Commerce Analytics Dashboard");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     // Order data: (customer_id, order_date, amount, category)
     let orders = vec![
-        Row::new(vec![], vec![
-            Value::Integer(1),
-            Value::Text("2024-01".to_string()),
-            Value::Integer(100),
-            Value::Text("Electronics".to_string()),
-        ]),
-        Row::new(vec![], vec![
-            Value::Integer(2),
-            Value::Text("2024-01".to_string()),
-            Value::Integer(150),
-            Value::Text("Books".to_string()),
-        ]),
-        Row::new(vec![], vec![
-            Value::Integer(1),
-            Value::Text("2024-02".to_string()),
-            Value::Integer(200),
-            Value::Text("Electronics".to_string()),
-        ]),
-        Row::new(vec![], vec![
-            Value::Integer(3),
-            Value::Text("2024-01".to_string()),
-            Value::Integer(75),
-            Value::Text("Electronics".to_string()),
-        ]),
-        Row::new(vec![], vec![
-            Value::Integer(2),
-            Value::Text("2024-02".to_string()),
-            Value::Integer(120),
-            Value::Text("Books".to_string()),
-        ]),
+        Row::new(
+            vec![],
+            vec![
+                Value::Integer(1),
+                Value::Text("2024-01".to_string()),
+                Value::Integer(100),
+                Value::Text("Electronics".to_string()),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Integer(2),
+                Value::Text("2024-01".to_string()),
+                Value::Integer(150),
+                Value::Text("Books".to_string()),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Integer(1),
+                Value::Text("2024-02".to_string()),
+                Value::Integer(200),
+                Value::Text("Electronics".to_string()),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Integer(3),
+                Value::Text("2024-01".to_string()),
+                Value::Integer(75),
+                Value::Text("Electronics".to_string()),
+            ],
+        ),
+        Row::new(
+            vec![],
+            vec![
+                Value::Integer(2),
+                Value::Text("2024-02".to_string()),
+                Value::Integer(120),
+                Value::Text("Books".to_string()),
+            ],
+        ),
     ];
 
     println!("\n  Analytics Query 1: Total sales by category");
@@ -393,9 +474,9 @@ fn main() -> Result<()> {
     // Summary
     // ========================================================================
     println!();
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!("Week 13 Analytics Summary");
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!("✅ AGGREGATE FUNCTIONS: COUNT, SUM, AVG, MIN, MAX, STRING_AGG, ARRAY_AGG");
     println!("✅ GROUP BY: Multi-column grouping with multiple aggregates");
     println!("✅ WINDOW FUNCTIONS: ROW_NUMBER, RANK, DENSE_RANK");
@@ -405,7 +486,7 @@ fn main() -> Result<()> {
     println!();
     println!("NexusQL now has enterprise-grade analytical capabilities!");
     println!("These features enable complex business intelligence, reporting, and data analysis.");
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
 
     Ok(())
 }

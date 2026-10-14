@@ -1,7 +1,7 @@
 // Performance Benchmarks
 // Validates real-world performance claims
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use nexusql::analytics::VectorizedExecutor;
 use nexusql::fulltext::FullTextSearch;
 use nexusql::index::btree::BTreeIndex;
@@ -12,10 +12,10 @@ use nexusql::types::{Row, Value};
 fn benchmark_btree_insert(c: &mut Criterion) {
     c.bench_function("btree_insert_1000", |b| {
         b.iter(|| {
-            let mut index = BTreeIndex::new("test_idx".to_string(), "id".to_string());
+            let mut index = BTreeIndex::new("id".to_string(), 0);
             for i in 0..1000 {
                 let row = Row::new(vec!["id".to_string()], vec![Value::Integer(i)]);
-                index.insert(&row, i as usize).unwrap();
+                index.insert(&row, i as usize);
             }
         });
     });

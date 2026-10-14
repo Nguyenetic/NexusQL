@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             rows.push(vec![
                 Value::Integer(id as i64),
                 Value::Text(format!("User{}", id)),
-                Value::Float((id as f64) * 1.5),
+                Value::from((id as f64) * 1.5),
                 Value::Text(format!("Cat{}", id % 100)),
                 Value::Integer((id % 2) as i64),
                 Value::Integer(id as i64),
