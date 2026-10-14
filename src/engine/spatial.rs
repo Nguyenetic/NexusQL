@@ -60,7 +60,7 @@ pub(super) fn candidates(
     let name = name.to_ascii_uppercase();
     if !matches!(
         name.as_str(),
-        "ST_CONTAINS" | "ST_WITHIN" | "ST_INTERSECTS" | "ST_DWITHIN"
+        "ST_CONTAINS" | "ST_WITHIN" | "ST_INTERSECTS" | "ST_DWITHIN" | "ST_COVERS" | "ST_COVEREDBY"
     ) || args.len() != if name == "ST_DWITHIN" { 3 } else { 2 }
     {
         return None;
