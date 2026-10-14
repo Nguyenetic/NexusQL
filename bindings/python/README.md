@@ -63,3 +63,42 @@ The wrapper also provides `execute_many`, `prepare`, and `transaction` helpers.
 `prepare` currently resends SQL on each call; it does not cache a native plan.
 Transaction behavior follows the core engine. Each database owns a Tokio runtime;
 operations are synchronous and release the Python GIL while the engine executes.
+
+## GeoPackage and GeoJSON (`nexusql.gpkg`, `nexusql.geojson`)
+
+Pure-Python, stdlib-only helpers (`sqlite3`/`json`) for moving feature data in
+and out of NexusQL. No GDAL, shapely, or other geo dependency.
+
+```python
+from nexusql import NexusDB, gpkg, geojson
+
+with NexusDB(":memory:") as db:
+    counts = gpkg.import_gpkg(db, "facility.gpkg")          # {"zones": 161, "devices": 27, ...}
+    gpkg.export_gpkg(db, "zones", "zones_only.gpkg", "zones")
+    geojson.export_geojson(db, "SELECT * FROM zones WHERE plant = 'Melt'", "melt.geojson")
+    geojson.import_geojson(db, "melt.geojson", "melt_zones")
+```
+
+- `import_gpkg(db, path, layers=None)` creates one NexusQL table per feature
+  layer (defaults to every `features` entry in `gpkg_contents`), with a
+  `GEOMETRY` column plus the layer's attribute columns, and a `USING gist`
+  spatial index on the geometry column. Does not modify the source file.
+- `export_gpkg(db, query_or_table, path, layer, geom_column="geom", srs_id=0)`
+  writes a valid GeoPackage (`gpkg_contents`, `gpkg_geometry_columns`,
+  `gpkg_spatial_ref_sys`) that QGIS can open, from a table name or a full
+  `SELECT`/`WITH` query.
+- `import_geojson(db, path, table, geom_column="geom")` /
+  `export_geojson(db, query_or_table, path, geom_column="geom")` do the same
+  for a GeoJSON `FeatureCollection` file.
+
+Geometry conversion goes through WKT, matching how NexusQL's Python wrapper
+already represents geometry (`QueryResult.rows` returns WKT strings), so
+import/export round-trips exactly for `POINT`, `LINESTRING`, `POLYGON`,
+`MULTIPOINT`, `MULTILINESTRING`, and `MULTIPOLYGON` (2D only, no Z/M).
+
+**Known limitation:** column, table, and layer names must be plain SQL
+identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`). NexusQL's `CREATE INDEX ... USING
+gist` does not currently resolve a double-quoted identifier back to its
+unquoted column, so these helpers validate and reject anything that would
+need quoting rather than emit an index that silently fails to apply. Rename
+the source column/layer before importing if this happens.
