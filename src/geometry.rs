@@ -2,6 +2,7 @@
 
 mod geodesic;
 mod geojson;
+pub mod prepared;
 mod topology;
 mod transform;
 
@@ -12,13 +13,41 @@ use geo::{
 use geo_types::{Geometry, LineString, Point, Rect};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use wkt::{ToWkt, TryFromWkt};
 
 /// A geometry with optional coordinate-system metadata.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GeometryValue {
-    shape: Geometry<f64>,
+    shape: Arc<Geometry<f64>>,
     pub srid: Option<i32>,
+    bounds: Option<Rect<f64>>,
+    coordinate_count: usize,
+}
+
+// Keep the existing two-field wire format. Derived caches and shared allocation
+// identity are rebuilt on deserialization, including when reopening old tables.
+impl Serialize for GeometryValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut value = serializer.serialize_struct("GeometryValue", 2)?;
+        value.serialize_field("shape", self.shape())?;
+        value.serialize_field("srid", &self.srid)?;
+        value.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for GeometryValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "GeometryValue")]
+        struct Stored {
+            shape: Geometry<f64>,
+            srid: Option<i32>,
+        }
+        let stored = Stored::deserialize(deserializer)?;
+        Self::new(stored.shape, stored.srid).map_err(serde::de::Error::custom)
+    }
 }
 
 impl GeometryValue {
@@ -55,7 +84,14 @@ impl GeometryValue {
         {
             return Err("Geometry coordinates must be finite".into());
         }
-        Ok(Self { shape, srid })
+        let bounds = shape.bounding_rect();
+        let coordinate_count = shape.coords_count();
+        Ok(Self {
+            shape: Arc::new(shape),
+            srid,
+            bounds,
+            coordinate_count,
+        })
     }
 
     pub fn shape(&self) -> &Geometry<f64> {
@@ -75,11 +111,15 @@ impl GeometryValue {
     }
 
     pub fn bounds(&self) -> Option<Rect<f64>> {
-        self.shape.bounding_rect()
+        self.bounds
     }
 
     pub fn estimated_size(&self) -> usize {
-        self.shape.coords_count() * 16 + 16
+        self.coordinate_count * 16 + std::mem::size_of::<Self>()
+    }
+
+    pub(crate) fn identity(&self) -> usize {
+        Arc::as_ptr(&self.shape) as usize
     }
 }
 
@@ -254,11 +294,11 @@ fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
                 return None;
             }
             match name {
-                "ST_CONTAINS" => Some(Value::Boolean(a.shape.contains(&b.shape))),
-                "ST_WITHIN" => Some(Value::Boolean(b.shape.contains(&a.shape))),
-                "ST_INTERSECTS" => Some(Value::Boolean(a.shape.intersects(&b.shape))),
-                "ST_COVERS" => Some(Value::Boolean(a.shape.relate(&b.shape).is_covers())),
-                "ST_COVEREDBY" => Some(Value::Boolean(a.shape.relate(&b.shape).is_coveredby())),
+                "ST_CONTAINS" => Some(Value::Boolean(a.shape().contains(b.shape()))),
+                "ST_WITHIN" => Some(Value::Boolean(b.shape().contains(a.shape()))),
+                "ST_INTERSECTS" => Some(Value::Boolean(a.shape().intersects(b.shape()))),
+                "ST_COVERS" => Some(Value::Boolean(a.shape().relate(b.shape()).is_covers())),
+                "ST_COVEREDBY" => Some(Value::Boolean(a.shape().relate(b.shape()).is_coveredby())),
                 "ST_UNION" => value(topology::union(a.shape(), b.shape())?, a.srid),
                 "ST_CLOSESTPOINT" => value(
                     topology::closest_point(a.shape(), b.shape())?.into(),
@@ -272,7 +312,7 @@ fn evaluate_inner(name: &str, args: &[Value]) -> Option<Value> {
                             None
                         };
                     }
-                    let distance = Euclidean.distance(&a.shape, &b.shape);
+                    let distance = Euclidean.distance(a.shape(), b.shape());
                     if name == "ST_DWITHIN" {
                         let radius = number(&args[2])?;
                         Some(Value::Boolean(radius >= 0.0 && distance <= radius))

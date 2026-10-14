@@ -59,6 +59,10 @@ harness = false
 name = "spatial_index_maintenance"
 harness = false
 
+[[bench]]
+name = "prepared_geometry"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1

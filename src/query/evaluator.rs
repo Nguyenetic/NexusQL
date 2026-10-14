@@ -366,6 +366,11 @@ fn to_bool(val: &Value) -> bool {
 fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams) -> Value {
     let name_upper = name.to_uppercase();
     if name_upper.starts_with("ST_") {
+        if let Some(predicate) = crate::geometry::prepared::Predicate::from_name(&name_upper) {
+            return crate::engine::Executor::evaluate_spatial_predicate(
+                row, predicate, args, params,
+            );
+        }
         let values: Vec<_> = args
             .iter()
             .map(|arg| evaluate_expr(row, arg, params))

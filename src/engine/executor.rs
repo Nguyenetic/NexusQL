@@ -217,6 +217,7 @@ impl Executor {
     }
 
     pub fn execute(&mut self, statement: &Statement, params: &QueryParams) -> Result<ResultSet> {
+        let _spatial_statement = super::spatial::StatementScope::enter();
         match statement {
             Statement::CreateTable {
                 name,
