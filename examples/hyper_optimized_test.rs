@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             batch.add_row(vec![
                 Value::Integer(id as i64),
                 Value::Text(format!("U{}", id)),
-                Value::Float((id as f64) * 1.5),
+                Value::from((id as f64) * 1.5),
                 Value::Text(format!("C{}", id % 100)),
                 Value::Integer((id % 2) as i64),
                 Value::Integer(id as i64),

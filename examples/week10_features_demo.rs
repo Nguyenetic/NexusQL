@@ -6,42 +6,38 @@
 //! - Sequences (auto-increment, nextval/currval)
 //! - Stored Procedures and Functions (PL/NexusQL)
 
-use nexus::error::Result;
-use nexus::procedure::plnexus::PLNexusExecutor;
-use nexus::procedure::{
-    FunctionVolatility, Parameter, ParameterMode, ProcedureManager, ReturnType, StoredFunction,
+use nexusql::procedure::plnexus::PLNexusExecutor;
+use nexusql::procedure::{Parameter, ProcedureManager, ReturnType, StoredFunction};
+use nexusql::sequence::{Sequence, SequenceManager};
+use nexusql::trigger::{
+    AuditLogFunction, LogTriggerFunction, Trigger, TriggerContext, TriggerEvent, TriggerLevel,
+    TriggerManager, TriggerResult, TriggerTiming, UpdateTimestampFunction,
 };
-use nexus::sequence::{Sequence, SequenceManager};
-use nexus::trigger::{
-    AuditLogFunction, LogTriggerFunction, Trigger, TriggerEvent, TriggerLevel, TriggerManager,
-    TriggerTiming, UpdateTimestampFunction,
-};
-use nexus::types::{Row, Value};
-use nexus::view::{View, ViewManager};
+use nexusql::types::{Row, Value};
+use nexusql::view::{View, ViewManager};
+use nexusql::Result;
 use std::sync::Arc;
 
 fn main() -> Result<()> {
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!("NexusQL Week 10 Features Demo");
     println!("Triggers • Views • Sequences • Stored Procedures");
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!();
 
     // ========================================================================
     // 1. SEQUENCES - Auto-increment and serial support
     // ========================================================================
     println!("📊 1. SEQUENCES - Auto-increment Generation");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     let seq_manager = SequenceManager::new();
 
     // Create a sequence for user IDs
-    let user_id_seq = Sequence::new("user_id_seq".to_string())
-        .start_value(1000)
-        .increment(1)
-        .min_value(Some(1))
-        .max_value(Some(999999))
-        .build();
+    let user_id_seq = Sequence::new("user_id_seq".to_string(), 1000)
+        .with_increment(1)
+        .with_min(1)
+        .with_max(999999);
 
     seq_manager.create_sequence(user_id_seq)?;
 
@@ -56,12 +52,11 @@ fn main() -> Result<()> {
     println!("  Current value: {}", current);
 
     // Create a cycling sequence for order numbers
-    let order_seq = Sequence::new("daily_order_seq".to_string())
-        .start_value(1)
-        .increment(1)
-        .max_value(Some(100))
-        .cycle(true)
-        .build();
+    let order_seq = Sequence::new("daily_order_seq".to_string(), 1)
+        .with_increment(1)
+        .with_min(1)
+        .with_max(100)
+        .cycle();
 
     seq_manager.create_sequence(order_seq)?;
     println!("\n  Creating daily_order_seq (cycles at 100)...");
@@ -78,20 +73,29 @@ fn main() -> Result<()> {
     // 2. TRIGGERS - Event-driven automation
     // ========================================================================
     println!("🔔 2. TRIGGERS - Event-Driven Table Automation");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     let trigger_mgr = TriggerManager::new();
 
     // Register trigger functions
-    trigger_mgr.register_function("log_trigger".to_string(), Arc::new(LogTriggerFunction))?;
+    trigger_mgr.register_function(
+        "log_trigger".to_string(),
+        Arc::new(LogTriggerFunction {
+            message: "User change".to_string(),
+        }),
+    );
     trigger_mgr.register_function(
         "update_timestamp".to_string(),
-        Arc::new(UpdateTimestampFunction::new("updated_at".to_string())),
-    )?;
+        Arc::new(UpdateTimestampFunction {
+            column: "updated_at".to_string(),
+        }),
+    );
     trigger_mgr.register_function(
         "audit_log".to_string(),
-        Arc::new(AuditLogFunction::new("audit_trail".to_string())),
-    )?;
+        Arc::new(AuditLogFunction {
+            audit_table: "audit_trail".to_string(),
+        }),
+    );
 
     // Create BEFORE INSERT trigger for logging
     let before_insert = Trigger::new(
@@ -99,27 +103,25 @@ fn main() -> Result<()> {
         "users".to_string(),
         TriggerTiming::Before,
         vec![TriggerEvent::Insert],
-    )
-    .level(TriggerLevel::Row)
-    .function("log_trigger".to_string())
-    .build();
+        TriggerLevel::Row,
+        "log_trigger".to_string(),
+    );
 
     trigger_mgr.create_trigger(before_insert)?;
     println!("  ✓ Created BEFORE INSERT trigger on 'users' table");
 
-    // Create AFTER UPDATE trigger for timestamp
-    let after_update = Trigger::new(
+    // Only BEFORE triggers can modify the new row's timestamp.
+    let before_update = Trigger::new(
         "update_user_timestamp".to_string(),
         "users".to_string(),
-        TriggerTiming::After,
+        TriggerTiming::Before,
         vec![TriggerEvent::Update],
-    )
-    .level(TriggerLevel::Row)
-    .function("update_timestamp".to_string())
-    .build();
+        TriggerLevel::Row,
+        "update_timestamp".to_string(),
+    );
 
-    trigger_mgr.create_trigger(after_update)?;
-    println!("  ✓ Created AFTER UPDATE trigger for auto-timestamps");
+    trigger_mgr.create_trigger(before_update)?;
+    println!("  ✓ Created BEFORE UPDATE trigger for auto-timestamps");
 
     // Create audit trail trigger
     let audit_trigger = Trigger::new(
@@ -131,29 +133,29 @@ fn main() -> Result<()> {
             TriggerEvent::Update,
             TriggerEvent::Delete,
         ],
-    )
-    .level(TriggerLevel::Row)
-    .function("audit_log".to_string())
-    .build();
+        TriggerLevel::Row,
+        "audit_log".to_string(),
+    );
 
     trigger_mgr.create_trigger(audit_trigger)?;
     println!("  ✓ Created audit trail trigger for sensitive data");
 
     // Simulate firing triggers
     println!("\n  Simulating INSERT into users table...");
-    let new_row = Row::new(vec![], vec![
-        Value::Integer(1001),
-        Value::Text("alice@example.com".to_string()),
-    ]);
+    let new_row = Row::new(
+        vec!["id".to_string(), "email".to_string()],
+        vec![
+            Value::Integer(1001),
+            Value::Text("alice@example.com".to_string()),
+        ],
+    );
 
     let result = trigger_mgr.fire_triggers(
         "users",
         TriggerTiming::Before,
-        TriggerEvent::Insert,
-        TriggerLevel::Row,
-        Some(&new_row),
-        None,
-    );
+        &TriggerContext::for_insert("users".to_string(), new_row),
+    )?;
+    assert!(matches!(result, TriggerResult::Proceed));
 
     println!("  ✓ BEFORE INSERT trigger fired successfully");
     println!("  ✓ Triggers provide automation, validation, and audit trails\n");
@@ -162,7 +164,7 @@ fn main() -> Result<()> {
     // 3. VIEWS - Virtual tables and query abstraction
     // ========================================================================
     println!("👁️  3. VIEWS - Virtual Tables and Query Abstraction");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     let view_mgr = ViewManager::new();
 
@@ -171,8 +173,7 @@ fn main() -> Result<()> {
         "active_users".to_string(),
         "SELECT id, email FROM users WHERE status = 'active'".to_string(),
     )
-    .with_columns(vec!["id".to_string(), "email".to_string()])
-    .build();
+    .with_columns(vec!["id".to_string(), "email".to_string()]);
 
     view_mgr.create_view(user_view)?;
     println!("  ✓ Created view 'active_users'");
@@ -182,8 +183,7 @@ fn main() -> Result<()> {
         "user_stats".to_string(),
         "SELECT COUNT(*) as total, AVG(age) as avg_age FROM users".to_string(),
     )
-    .materialized(true)
-    .build();
+    .materialized();
 
     view_mgr.create_view(stats_view)?;
     println!("  ✓ Created materialized view 'user_stats'");
@@ -193,9 +193,8 @@ fn main() -> Result<()> {
         "user_emails".to_string(),
         "SELECT id, email FROM users".to_string(),
     )
-    .updateable(true)
-    .with_check_option(true)
-    .build();
+    .updateable()
+    .with_check_option();
 
     view_mgr.create_view(updateable_view)?;
     println!("  ✓ Created updateable view 'user_emails' with CHECK OPTION");
@@ -208,7 +207,10 @@ fn main() -> Result<()> {
     println!("    Rewritten: {}", rewritten);
 
     // Refresh materialized view
-    let mock_data = vec![Row::new(vec![], vec![Value::Integer(150), Value::Integer(32)])];
+    let mock_data = vec![Row::new(
+        vec![],
+        vec![Value::Integer(150), Value::Integer(32)],
+    )];
     view_mgr.refresh_materialized_view("user_stats", mock_data)?;
     println!("\n  ✓ Materialized view 'user_stats' refreshed");
     println!("  ✓ Views provide abstraction, security, and performance\n");
@@ -217,7 +219,7 @@ fn main() -> Result<()> {
     // 4. STORED PROCEDURES - Server-side programmable logic
     // ========================================================================
     println!("⚙️  4. STORED PROCEDURES - Server-Side Programmable Logic");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     let proc_mgr = ProcedureManager::new();
     let executor = PLNexusExecutor;
@@ -233,8 +235,7 @@ fn main() -> Result<()> {
         Parameter::new("b".to_string(), "INTEGER".to_string()),
     ])
     .returns(ReturnType::Scalar("INTEGER".to_string()))
-    .volatility(FunctionVolatility::Immutable)
-    .build();
+    .immutable();
 
     proc_mgr.create_function(add_func.clone())?;
     println!("  ✓ Created function 'add_numbers(a INTEGER, b INTEGER)'");
@@ -262,8 +263,7 @@ END;
     )
     .with_parameters(vec![Parameter::new("n".to_string(), "INTEGER".to_string())])
     .returns(ReturnType::Scalar("INTEGER".to_string()))
-    .volatility(FunctionVolatility::Immutable)
-    .build();
+    .immutable();
 
     proc_mgr.create_function(factorial_func)?;
     println!("  ✓ Created function 'factorial(n INTEGER)' with WHILE loop");
@@ -279,9 +279,7 @@ END;
         "TEXT".to_string(),
     )])
     .returns(ReturnType::Void)
-    .volatility(FunctionVolatility::Volatile)
-    .is_procedure(true)
-    .build();
+    .procedure();
 
     proc_mgr.create_function(log_proc)?;
     println!("  ✓ Created procedure 'log_event(event_name TEXT)'");
@@ -297,16 +295,20 @@ END;
         Parameter::new("b".to_string(), "INTEGER".to_string()),
         Parameter::new("c".to_string(), "INTEGER".to_string()),
     ])
-    .returns(ReturnType::Scalar("INTEGER".to_string()))
-    .build();
+    .returns(ReturnType::Scalar("INTEGER".to_string()));
 
     proc_mgr.create_function(add_three)?;
     println!("  ✓ Created overloaded 'add_numbers(a, b, c INTEGER)'");
 
-    let funcs = proc_mgr.get_functions_by_name("add_numbers")?;
+    let overload_count = proc_mgr
+        .list_functions()
+        .iter()
+        .filter(|signature| signature.starts_with("add_numbers("))
+        .count();
+    assert_eq!(overload_count, 2);
     println!(
         "    Found {} overloaded versions of 'add_numbers'",
-        funcs.len()
+        overload_count
     );
 
     println!("  ✓ PL/NexusQL supports variables, loops, conditions, and more\n");
@@ -315,15 +317,12 @@ END;
     // 5. REAL-WORLD SCENARIO - All features together
     // ========================================================================
     println!("🌟 5. REAL-WORLD SCENARIO - E-Commerce Order System");
-    println!("-".repeat(80));
+    println!("{}", "-".repeat(80));
 
     println!("\n  Setting up order system components:");
 
     // Sequence for order IDs
-    let order_id_seq = Sequence::new("order_id_seq".to_string())
-        .start_value(10000)
-        .increment(1)
-        .build();
+    let order_id_seq = Sequence::new("order_id_seq".to_string(), 10000).with_increment(1);
     seq_manager.create_sequence(order_id_seq)?;
     println!("    ✓ Sequence: order_id_seq (auto-increment order IDs)");
 
@@ -333,10 +332,9 @@ END;
         "orders".to_string(),
         TriggerTiming::Before,
         vec![TriggerEvent::Insert],
-    )
-    .level(TriggerLevel::Row)
-    .function("update_timestamp".to_string())
-    .build();
+        TriggerLevel::Row,
+        "update_timestamp".to_string(),
+    );
     trigger_mgr.create_trigger(order_timestamp)?;
     println!("    ✓ Trigger: Auto-timestamp new orders");
 
@@ -344,8 +342,7 @@ END;
     let recent_orders = View::new(
         "recent_orders".to_string(),
         "SELECT * FROM orders WHERE created_at > NOW() - INTERVAL '7 days'".to_string(),
-    )
-    .build();
+    );
     view_mgr.create_view(recent_orders)?;
     println!("    ✓ View: recent_orders (last 7 days)");
 
@@ -372,8 +369,7 @@ END;
         Parameter::new("item_price".to_string(), "DECIMAL".to_string()),
         Parameter::new("quantity".to_string(), "INTEGER".to_string()),
     ])
-    .returns(ReturnType::Scalar("DECIMAL".to_string()))
-    .build();
+    .returns(ReturnType::Scalar("DECIMAL".to_string()));
     proc_mgr.create_function(calc_total)?;
     println!("    ✓ Function: calculate_order_total(price, quantity)");
 
@@ -389,9 +385,9 @@ END;
     // Summary
     // ========================================================================
     println!();
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!("Week 10 Features Summary");
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
     println!("✅ SEQUENCES: Atomic auto-increment with nextval/currval/setval");
     println!("✅ TRIGGERS: BEFORE/AFTER/INSTEAD OF with row/statement levels");
     println!("✅ VIEWS: Regular, materialized, and updateable views");
@@ -399,7 +395,7 @@ END;
     println!();
     println!("These 'convenience features' make NexusQL significantly more developer-friendly");
     println!("and bring us closer to full PostgreSQL compatibility!");
-    println!("=".repeat(80));
+    println!("{}", "=".repeat(80));
 
     Ok(())
 }
