@@ -279,7 +279,9 @@ fn evaluate_binary_op(left: &Value, op: &BinaryOperator, right: &Value) -> Value
             if let Some(distance) = left.l2_distance(right) {
                 Value::Float(ordered_float::OrderedFloat(distance as f64))
             } else {
-                Value::Null
+                // PostGIS shares <-> with pgvector. Reuse all ST_Distance
+                // semantics, including WKT input, empty geometries and SRIDs.
+                crate::geometry::evaluate("ST_DISTANCE", &[left.clone(), right.clone()])
             }
         }
         BinaryOperator::CosineDistance => {
