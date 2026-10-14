@@ -1,12 +1,139 @@
 //! Conservative spatial access paths: bounding-box candidates followed by the
 //! original SQL predicate in the executor. Never prune on just one arm of OR.
 
+use crate::geometry::prepared::{Predicate, PreparedGeometryCache};
 use crate::geometry::{geometry, number};
 use crate::index::{GiSTIndexType, GiSTPredicate};
 use crate::query::ast::{BinaryOperator, Expr};
 use crate::query::evaluator::{evaluate_expr, QueryParams};
 use crate::storage::{IndexType, Table};
-use crate::types::Row;
+use crate::types::{Row, Value};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
+#[derive(Default)]
+struct StatementState {
+    prepared: PreparedGeometryCache,
+    constants: BTreeMap<Expr, Value>,
+    constant_bytes: usize,
+}
+
+thread_local! {
+    // Executor::execute is synchronous. geo's prepared graph is !Send; keeping
+    // it here avoids changing Executor/QueryParams' Send/Sync or public layout.
+    static STATEMENT: RefCell<Option<StatementState>> = const { RefCell::new(None) };
+}
+
+pub(super) struct StatementScope(Option<StatementState>);
+
+impl StatementScope {
+    pub(super) fn enter() -> Self {
+        Self(STATEMENT.with(|state| state.replace(Some(StatementState::default()))))
+    }
+}
+
+impl Drop for StatementScope {
+    fn drop(&mut self) {
+        // Errors and unwinding release caches too. Nested statements get their
+        // own constants/parameters and restore the enclosing statement's cache.
+        STATEMENT.with(|state| state.replace(self.0.take()));
+    }
+}
+
+fn value_bytes(value: &Value) -> usize {
+    std::mem::size_of::<Value>()
+        + match value {
+            Value::Text(s) => s.len(),
+            Value::Blob(b) => b.len(),
+            Value::Vector(v) => v.len() * std::mem::size_of::<f32>(),
+            Value::Geometry(g) => g.estimated_size(),
+            _ => 0,
+        }
+}
+
+// Unlike available(), this only accepts known deterministic expressions. Never
+// memoize a row-dependent expression or a function such as RANDOM()/NOW().
+fn constant_bytes(expr: &Expr) -> Option<usize> {
+    let children = match expr {
+        Expr::Literal(value) => value_bytes(value),
+        Expr::Parameter(crate::query::ast::Parameter::Named(name)) => name.len(),
+        Expr::Parameter(_) => 0,
+        Expr::Cast { expr, .. } | Expr::IsNull(expr) | Expr::IsNotNull(expr) => {
+            constant_bytes(expr)?
+        }
+        Expr::BinaryOp { left, right, .. } => constant_bytes(left)? + constant_bytes(right)?,
+        Expr::Function { name, args } if name.to_ascii_uppercase().starts_with("ST_") => {
+            name.len() + args.iter().map(constant_bytes).sum::<Option<usize>>()?
+        }
+        _ => return None,
+    };
+    Some(std::mem::size_of::<Expr>() + children)
+}
+
+fn predicate_argument(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
+    let size = constant_bytes(expr);
+    if size.is_some() {
+        if let Some(value) = STATEMENT.with(|state| {
+            state
+                .borrow()
+                .as_ref()
+                .and_then(|state| state.constants.get(expr).cloned())
+        }) {
+            return value;
+        }
+    }
+    // Evaluation may recursively invoke another spatial predicate. Do not hold
+    // a RefCell borrow across the evaluator call.
+    let evaluated = evaluate_expr(row, expr, params);
+    let value = if let Value::Text(text) = &evaluated {
+        crate::geometry::GeometryValue::from_wkt(text)
+            .ok()
+            .map(Value::Geometry)
+            .unwrap_or(Value::Null)
+    } else {
+        evaluated
+    };
+    if let Some(size) = size {
+        STATEMENT.with(|state| {
+            if let Some(state) = state.borrow_mut().as_mut() {
+                let bytes = size + value_bytes(&value);
+                if state.constants.len() < 128
+                    && bytes <= 1_048_576_usize.saturating_sub(state.constant_bytes)
+                {
+                    state.constant_bytes += bytes;
+                    state.constants.insert(expr.clone(), value.clone());
+                }
+            }
+        });
+    }
+    value
+}
+
+impl super::Executor {
+    pub(crate) fn evaluate_spatial_predicate(
+        row: &Row,
+        predicate: Predicate,
+        args: &[Expr],
+        params: &QueryParams,
+    ) -> Value {
+        if args.len() != 2 {
+            return Value::Null;
+        }
+        let a = predicate_argument(row, &args[0], params);
+        let b = predicate_argument(row, &args[1], params);
+        let (Some(a), Some(b)) = (geometry(&a), geometry(&b)) else {
+            return Value::Null;
+        };
+        STATEMENT.with(|state| {
+            let result = if let Some(state) = state.borrow_mut().as_mut() {
+                state.prepared.evaluate(predicate, &a, &b)
+            } else {
+                predicate.unprepared(&a, &b)
+            };
+            result.map(Value::Boolean).unwrap_or(Value::Null)
+        })
+    }
+}
 
 pub(super) fn qualify(row: &Row, qualifier: &str) -> Row {
     Row::new(
@@ -240,4 +367,103 @@ pub(super) fn knn_rows(
             .map(|(_, id)| table.rows[id].clone())
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod prepared_tests {
+    use super::*;
+    use crate::geometry::GeometryValue;
+    use crate::query::ast::Parameter;
+
+    fn evaluate(expr: Expr, params: &QueryParams) {
+        let row = Row::new(
+            vec!["p".into()],
+            vec![Value::Geometry(
+                GeometryValue::from_wkt("POINT(1 1)").unwrap(),
+            )],
+        );
+        assert_eq!(
+            super::super::Executor::evaluate_spatial_predicate(
+                &row,
+                Predicate::Contains,
+                &[expr, Expr::Column("p".into())],
+                params,
+            ),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn constants_prepare_once_and_nested_scopes_release_state() {
+        assert!(STATEMENT.with(|s| s.borrow().is_none()));
+        let params = QueryParams::with_positional(vec![Value::Text(
+            "POLYGON((0 0,10 0,10 10,0 10,0 0))".into(),
+        )]);
+        let expr = Expr::Parameter(Parameter::Positional(1));
+        {
+            let _statement = StatementScope::enter();
+            for _ in 0..100 {
+                evaluate(expr.clone(), &params);
+            }
+            STATEMENT.with(|s| {
+                let s = s.borrow();
+                let s = s.as_ref().unwrap();
+                assert_eq!(s.prepared.len(), 1);
+                assert_eq!(s.constants.len(), 1);
+            });
+            {
+                let _nested = StatementScope::enter();
+                STATEMENT.with(|s| assert!(s.borrow().as_ref().unwrap().prepared.is_empty()));
+                evaluate(expr.clone(), &params);
+            }
+            STATEMENT.with(|s| assert_eq!(s.borrow().as_ref().unwrap().prepared.len(), 1));
+            std::thread::spawn(|| assert!(STATEMENT.with(|s| s.borrow().is_none())))
+                .join()
+                .unwrap();
+        }
+        assert!(STATEMENT.with(|s| s.borrow().is_none()));
+        // A standalone expression evaluation must not create a persistent cache.
+        evaluate(expr, &params);
+        assert!(STATEMENT.with(|s| s.borrow().is_none()));
+    }
+
+    #[test]
+    fn errors_and_unwinding_release_statement_cache() {
+        let mut executor = super::super::Executor::new();
+        assert!(executor
+            .execute(
+                &crate::QueryParser::parse("SELECT * FROM missing").unwrap(),
+                &QueryParams::new()
+            )
+            .is_err());
+        assert!(STATEMENT.with(|s| s.borrow().is_none()));
+        let _ = std::panic::catch_unwind(|| {
+            let _statement = StatementScope::enter();
+            panic!("test unwinding");
+        });
+        assert!(STATEMENT.with(|s| s.borrow().is_none()));
+    }
+
+    #[test]
+    fn constant_cache_has_entry_and_byte_limits() {
+        let _statement = StatementScope::enter();
+        let row = Row::new(vec![], vec![]);
+        for i in 0..256 {
+            predicate_argument(&row, &Expr::Literal(Value::Integer(i)), &QueryParams::new());
+        }
+        STATEMENT.with(|s| assert_eq!(s.borrow().as_ref().unwrap().constants.len(), 128));
+        let _nested = StatementScope::enter();
+        predicate_argument(
+            &row,
+            &Expr::Literal(Value::Text("x".repeat(1_048_576))),
+            &QueryParams::new(),
+        );
+        STATEMENT.with(|s| assert!(s.borrow().as_ref().unwrap().constants.is_empty()));
+        assert!(constant_bytes(&Expr::Function {
+            name: "RANDOM".into(),
+            args: vec![]
+        })
+        .is_none());
+        assert!(constant_bytes(&Expr::Column("geom".into())).is_none());
+    }
 }

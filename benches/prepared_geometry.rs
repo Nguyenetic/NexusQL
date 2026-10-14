@@ -1,6 +1,14 @@
 //! KFM-sized, deterministic SQL join: 500 zones (20..=200 vertices), 50,000 devices.
 //! Run with `cargo bench --bench prepared_geometry -- --runs 3` on both revisions.
 //! Setup and parsing are excluded; every timed sample executes a fresh statement.
+//!
+//! Reference run, Windows x64, release profile, three samples (2026-10-14):
+//!                      base 57068ef       prepared cache       speedup
+//! scan_join median     24,214.716 ms      11,297.150 ms         2.14x
+//! gist_join median        377.785 ms         269.560 ms         1.40x
+//! Both paths/revisions returned 32,872 rows, checksum 822932692973692.
+//! These SQL timings include shared geometry clones and cached bounds as well
+//! as prepared predicates; they do not isolate the edge index's contribution.
 
 use geo_types::{Coord, LineString, Point, Polygon};
 use nexusql::engine::Executor;
