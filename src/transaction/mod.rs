@@ -1,7 +1,8 @@
 // Transaction Management System
 // Week 9: Database Fundamentals Phase 3
-// PostgreSQL-compatible transactions with MVCC and WAL
+// Standalone transaction/MVCC API. Default SQL uses the durable module below.
 
+pub(crate) mod durable;
 pub mod mvcc;
 pub mod wal;
 

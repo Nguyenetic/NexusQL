@@ -1,0 +1,8 @@
+NexusQL SQL write-ahead log
+-------------------------
+src/storage/wal.rs uses the frame, commit marker, salt, rolling checksum, and
+checkpoint ordering design of SQLite's src/wal.c. SQLite is in the public
+domain: https://www.sqlite.org/copyright.html
+Reference: https://www.sqlite.org/src/file/src/wal.c
+The implementation and binary format are adapted to NexusQL's sled key storage;
+NexusQL WAL files are not SQLite WAL files. No PostGIS or GEOS code was copied.

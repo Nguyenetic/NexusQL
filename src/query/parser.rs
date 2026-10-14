@@ -53,6 +53,41 @@ impl Dialect for NexusQLDialect {
         ch == '"' || ch == '`' // Support both PostgreSQL and SQLite quotes
     }
 
+    fn parse_statement(
+        &self,
+        parser: &mut SqlParser,
+    ) -> Option<std::result::Result<sql_ast::Statement, ParserError>> {
+        // sqlparser's PRAGMA path accepts literals, but SQLite-style sync and
+        // journal settings also use bare words: PRAGMA synchronous = FULL.
+        // Consume only this four-token shape; normal parsing checks the suffix.
+        let (Token::Word(keyword), Token::Word(name), Token::Eq, Token::Word(value)) = (
+            parser.peek_token().token,
+            parser.peek_nth_token(1).token,
+            parser.peek_nth_token(2).token,
+            parser.peek_nth_token(3).token,
+        ) else {
+            return None;
+        };
+        if !keyword.value.eq_ignore_ascii_case("pragma")
+            || keyword.quote_style.is_some()
+            || !matches!(
+                name.value.to_ascii_lowercase().as_str(),
+                "synchronous" | "journal_mode"
+            )
+            || value.quote_style.is_some()
+        {
+            return None;
+        }
+        for _ in 0..4 {
+            parser.next_token();
+        }
+        Some(Ok(sql_ast::Statement::Pragma {
+            name: sql_ast::ObjectName(vec![sql_ast::Ident::new(name.value)]),
+            value: Some(sql_ast::Value::SingleQuotedString(value.value)),
+            is_eq: true,
+        }))
+    }
+
     fn get_next_precedence(
         &self,
         parser: &SqlParser,
