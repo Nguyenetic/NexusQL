@@ -13,6 +13,7 @@
 
 use crate::types::Value;
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -21,6 +22,7 @@ use std::sync::{
 #[derive(Debug, Clone, PartialEq)]
 struct SpatialEntry {
     row_id: usize,
+    // Computed once on insertion; tree traversal never walks the geometry.
     bounds: AABB<[f64; 2]>,
 }
 
@@ -50,10 +52,13 @@ pub struct GiSTIndex {
     /// Root node of the tree
     root: Option<Box<GiSTNode>>,
     spatial: RTree<SpatialEntry>,
-    spatial_srid: Option<i32>,
-    mixed_spatial_srids: bool,
+    spatial_srids: HashMap<i32, usize>,
     searches: Arc<AtomicU64>,
     candidates: Arc<AtomicU64>,
+    full_rebuild_count: u64,
+    bulk_load_count: u64,
+    insert_count: u64,
+    remove_count: u64,
 
     /// Index type (determines predicates and keys)
     index_type: GiSTIndexType,
@@ -312,10 +317,13 @@ impl GiSTIndex {
             column_name,
             root: None,
             spatial: RTree::new(),
-            spatial_srid: None,
-            mixed_spatial_srids: false,
+            spatial_srids: HashMap::new(),
             searches: Arc::new(AtomicU64::new(0)),
             candidates: Arc::new(AtomicU64::new(0)),
+            full_rebuild_count: 0,
+            bulk_load_count: 0,
+            insert_count: 0,
+            remove_count: 0,
             index_type,
             entry_count: 0,
         }
@@ -327,14 +335,11 @@ impl GiSTIndex {
             if self.index_type == GiSTIndexType::RTree {
                 if let Some(bounds) = predicate.envelope() {
                     if let Value::Geometry(g) = value {
-                        let srid = g.srid.unwrap_or(0);
-                        if self.spatial_srid.is_some_and(|previous| previous != srid) {
-                            self.mixed_spatial_srids = true;
-                        }
-                        self.spatial_srid = Some(srid);
+                        *self.spatial_srids.entry(g.srid.unwrap_or(0)).or_default() += 1;
                     }
                     self.spatial.insert(SpatialEntry { row_id, bounds });
                     self.entry_count += 1;
+                    self.insert_count += 1;
                 }
                 return;
             }
@@ -354,6 +359,117 @@ impl GiSTIndex {
                 }));
             }
             self.entry_count += 1;
+            self.insert_count += 1;
+        }
+    }
+
+    /// Replace all entries, packing spatial bounds with rstar's OMT bulk loader.
+    pub fn bulk_load<'a>(&mut self, values: impl IntoIterator<Item = (usize, &'a Value)>) {
+        self.clear();
+        if self.index_type == GiSTIndexType::RTree {
+            self.append_spatial_batch(values);
+        } else {
+            for (id, value) in values {
+                self.insert(id, value);
+            }
+        }
+    }
+
+    /// Pack an appended batch together with the existing cached bounds.
+    pub fn insert_batch<'a>(&mut self, values: impl IntoIterator<Item = (usize, &'a Value)>) {
+        if self.index_type == GiSTIndexType::RTree {
+            self.full_rebuild_count += 1;
+            self.append_spatial_batch(values);
+        } else {
+            for (id, value) in values {
+                self.insert(id, value);
+            }
+        }
+    }
+
+    fn append_spatial_batch<'a>(&mut self, values: impl IntoIterator<Item = (usize, &'a Value)>) {
+        let mut entries: Vec<_> = std::mem::take(&mut self.spatial).into_iter().collect();
+        for (row_id, value) in values {
+            if let Some(bounds) = self.value_to_predicate(value).and_then(|p| p.envelope()) {
+                if let Value::Geometry(g) = value {
+                    *self.spatial_srids.entry(g.srid.unwrap_or(0)).or_default() += 1;
+                }
+                entries.push(SpatialEntry { row_id, bounds });
+            }
+        }
+        self.entry_count = entries.len();
+        self.spatial = RTree::bulk_load(entries);
+        self.bulk_load_count += 1;
+    }
+
+    /// Remove exactly one row using its old value, even when bounds are duplicated.
+    pub fn remove(&mut self, row_id: usize, value: &Value) -> bool {
+        let Some(predicate) = self.value_to_predicate(value) else {
+            return false;
+        };
+        if self.index_type == GiSTIndexType::RTree {
+            let Some(bounds) = predicate.envelope() else {
+                return false;
+            };
+            if self
+                .spatial
+                .remove(&SpatialEntry { row_id, bounds })
+                .is_none()
+            {
+                return false;
+            }
+            if let Value::Geometry(g) = value {
+                let srid = g.srid.unwrap_or(0);
+                if let Some(count) = self.spatial_srids.get_mut(&srid) {
+                    *count -= 1;
+                    if *count == 0 {
+                        self.spatial_srids.remove(&srid);
+                    }
+                }
+            }
+        } else {
+            // Non-spatial GiST currently stores its entries in a single leaf.
+            let Some(root) = &mut self.root else {
+                return false;
+            };
+            let Some(position) = root.children.iter().position(|entry| {
+                matches!(entry.pointer, GiSTPointer::RowId(id) if id == row_id)
+                    && entry.key == predicate
+            }) else {
+                return false;
+            };
+            root.children.remove(position);
+            if let Some(first) = root.children.first() {
+                root.predicate = root
+                    .children
+                    .iter()
+                    .skip(1)
+                    .fold(first.key.clone(), |p, e| p.union(&e.key));
+            } else {
+                self.root = None;
+            }
+        }
+        self.entry_count -= 1;
+        self.remove_count += 1;
+        true
+    }
+
+    /// Compact vector offsets after deletes without changing bounds or tree shape.
+    pub(crate) fn remap_row_ids(&mut self, offsets: &[usize]) {
+        for entry in self.spatial.iter_mut() {
+            entry.row_id = offsets[entry.row_id];
+            debug_assert_ne!(entry.row_id, usize::MAX);
+        }
+        fn remap(node: &mut GiSTNode, offsets: &[usize]) {
+            for entry in &mut node.children {
+                match &mut entry.pointer {
+                    GiSTPointer::RowId(id) => *id = offsets[*id],
+                    GiSTPointer::Node(child) => remap(child, offsets),
+                }
+            }
+        }
+        if let Some(root) = &mut self.root {
+            remap(root, offsets);
         }
     }
 
@@ -448,8 +564,9 @@ impl GiSTIndex {
     pub(crate) fn supports_knn(&self, srid: Option<i32>, row_count: usize) -> bool {
         self.index_type == GiSTIndexType::RTree
             && self.entry_count == row_count
-            && !self.mixed_spatial_srids
-            && (row_count == 0 || self.spatial_srid == Some(srid.unwrap_or(0)))
+            && (row_count == 0
+                || (self.spatial_srids.len() == 1
+                    && self.spatial_srids.get(&srid.unwrap_or(0)) == Some(&row_count)))
     }
 
     /// Lazily visit bounding boxes in increasing squared distance from a point.
@@ -467,14 +584,13 @@ impl GiSTIndex {
             })
     }
 
-    /// Row IDs are vector offsets. Rebuild after a delete or update so offsets
-    /// and bounds cannot become stale; retain diagnostic counters.
+    /// Clear all entries, retaining diagnostic counters. Used for explicit rebuilds.
     pub fn clear(&mut self) {
         self.root = None;
         self.spatial = RTree::new();
-        self.spatial_srid = None;
-        self.mixed_spatial_srids = false;
+        self.spatial_srids.clear();
         self.entry_count = 0;
+        self.full_rebuild_count += 1;
     }
 
     /// Search within a node
@@ -505,6 +621,10 @@ impl GiSTIndex {
             tree_height: self.tree_height(),
             search_count: self.searches.load(Ordering::Relaxed),
             candidates_returned: self.candidates.load(Ordering::Relaxed),
+            full_rebuild_count: self.full_rebuild_count,
+            bulk_load_count: self.bulk_load_count,
+            insert_count: self.insert_count,
+            remove_count: self.remove_count,
         }
     }
 
@@ -554,6 +674,14 @@ pub struct GiSTStats {
     /// Actual search calls, including SQL scans and parameterized join probes.
     pub search_count: u64,
     pub candidates_returned: u64,
+    /// Full clears/builds, including repacking an appended batch. Restored on rollback.
+    pub full_rebuild_count: u64,
+    /// Calls to RTree::bulk_load, including empty index creation.
+    pub bulk_load_count: u64,
+    /// Successful individual insertions (excludes packed spatial batches).
+    pub insert_count: u64,
+    /// Successful individual removals.
+    pub remove_count: u64,
 }
 
 #[cfg(test)]

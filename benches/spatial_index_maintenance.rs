@@ -18,7 +18,7 @@ fn fixture() -> Executor {
     )
     .unwrap();
     let table = ex.get_tables_mut().get_mut("devices").unwrap();
-    let mut rng = StdRng::seed_from_u64(0x5254_5245_45);
+    let mut rng = StdRng::seed_from_u64(0x0052_5452_4545);
     for id in 0..100_000 {
         let point = Point::new(rng.gen_range(0.0..10_000.0), rng.gen_range(0.0..10_000.0));
         table.insert(Row::new(
