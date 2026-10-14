@@ -110,6 +110,7 @@ impl DefaultEngine {
         // Reserve capacity to avoid rebuilds
         t.rows.reserve(count);
 
+        let mut batch = Vec::with_capacity(count);
         for raw in rows {
             let mut row_values = vec![Value::Null; t.columns.len()];
             for (i, v) in raw.into_iter().enumerate() {
@@ -121,8 +122,9 @@ impl DefaultEngine {
             // that's wasteful but a separate refactor. Reuse the slice once
             // to keep the clone cheap.
             t.coerce_values(&mut row_values)?;
-            t.insert(Row::new(t.columns.clone(), row_values));
+            batch.push(Row::new(t.columns.clone(), row_values));
         }
+        t.insert_batch(batch);
 
         // Mark dirty so flush() writes this table
         if !self.is_memory {

@@ -359,11 +359,9 @@ impl Executor {
                                     first_col.clone(),
                                     index_type,
                                 );
-                                for (id, row) in t.rows.iter().enumerate() {
-                                    if let Some(value) = row.values.get(col_idx) {
-                                        gist_index.insert(id, value);
-                                    }
-                                }
+                                gist_index.bulk_load(t.rows.iter().enumerate().filter_map(
+                                    |(id, row)| row.values.get(col_idx).map(|value| (id, value)),
+                                ));
                                 t.schema.gist_indexes.retain(|def| def.name != *index_name);
                                 t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
                                     name: index_name.clone(),
@@ -475,6 +473,7 @@ impl Executor {
                         c.to_lowercase() == "id" || t.auto_increment_column.as_ref() == Some(c)
                     });
 
+                    let mut batch = Vec::new();
                     for expr_set in values {
                         // Evaluate each expression with the provided parameters
                         // Use an empty row since we're not referencing columns in INSERT VALUES
@@ -537,10 +536,9 @@ impl Executor {
                                 if let Some(pk_idx) = pk_col_idx {
                                     let pk_value = &insert_values[pk_idx];
                                     // Remove existing row with same PK
-                                    t.rows.retain(|existing| {
+                                    t.retain_rows(|existing| {
                                         existing.values.get(pk_idx) != Some(pk_value)
                                     });
-                                    t.rebuild_gist_indexes();
                                 }
                                 t.insert(row);
                             }
@@ -605,10 +603,11 @@ impl Executor {
                             _ => {
                                 // No conflict handling or DoUpdate/DoNothing (PostgreSQL style)
                                 // Just do normal insert
-                                t.insert(row);
+                                batch.push(row);
                             }
                         }
                     }
+                    t.insert_batch(batch);
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(
@@ -825,18 +824,19 @@ impl Executor {
             } => {
                 if let Some(t) = self.tables.get_mut(table) {
                     // Validate the whole statement before replacing rows or index bounds.
-                    let mut updated = t.rows.clone();
-                    for row in &mut updated {
+                    let mut updated = Vec::new();
+                    for (row_id, row) in t.rows.iter().enumerate() {
                         let should_update = where_clause
                             .as_ref()
                             .map(|expr| evaluate_where(row, expr, params))
                             .unwrap_or(true);
 
                         if should_update {
+                            let mut row = row.clone();
                             for (col_name, new_expr) in set {
                                 if let Some(idx) = row.columns.iter().position(|c| c == col_name) {
                                     // Evaluate the expression with parameters
-                                    let mut value = evaluate_expr(row, new_expr, params);
+                                    let mut value = evaluate_expr(&row, new_expr, params);
                                     if t.schema.column_types.get(col_name)
                                         == Some(&DataType::Geometry)
                                     {
@@ -845,10 +845,12 @@ impl Executor {
                                     row.values[idx] = value;
                                 }
                             }
+                            updated.push((row_id, row));
                         }
                     }
-                    t.rows = updated;
-                    t.rebuild_gist_indexes();
+                    for (row_id, row) in updated {
+                        t.replace_row(row_id, row);
+                    }
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(
@@ -860,11 +862,10 @@ impl Executor {
             Statement::Delete { from, where_clause } => {
                 if let Some(t) = self.tables.get_mut(from) {
                     if let Some(expr) = where_clause {
-                        t.rows.retain(|row| !evaluate_where(row, expr, params));
+                        t.retain_rows(|row| !evaluate_where(row, expr, params));
                     } else {
-                        t.rows.clear();
+                        t.retain_rows(|_| false);
                     }
-                    t.rebuild_gist_indexes();
                     Ok(ResultSet::empty())
                 } else {
                     Err(crate::NexusError::QueryError(format!(

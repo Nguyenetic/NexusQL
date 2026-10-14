@@ -230,6 +230,78 @@ impl Table {
         self.rows.push(row);
     }
 
+    /// Append a batch, packing GiST entries once and reusing existing cached bounds.
+    pub fn insert_batch(&mut self, rows: Vec<Row>) {
+        if rows.len() <= 1 {
+            for row in rows {
+                self.insert(row);
+            }
+            return;
+        }
+        let start = self.rows.len();
+        for index in self.indexes.values_mut() {
+            for (offset, row) in rows.iter().enumerate() {
+                index.insert(row, start + offset);
+            }
+        }
+        for index in self.typed_indexes.values_mut() {
+            if let IndexType::GiST(index) = index {
+                let column = index.column_name.clone();
+                index.insert_batch(rows.iter().enumerate().filter_map(|(offset, row)| {
+                    row.get(&column).map(|value| (start + offset, value))
+                }));
+            }
+        }
+        self.rows.extend(rows);
+    }
+
+    /// Replace a validated row, maintaining only changed GiST column values.
+    pub fn replace_row(&mut self, row_id: usize, row: Row) {
+        let old = &self.rows[row_id];
+        for index in self.typed_indexes.values_mut() {
+            if let IndexType::GiST(index) = index {
+                let previous = old.get(&index.column_name).unwrap_or(&Value::Null);
+                let next = row.get(&index.column_name).unwrap_or(&Value::Null);
+                if previous != next {
+                    index.remove(row_id, previous);
+                    index.insert(row_id, next);
+                }
+            }
+        }
+        self.rows[row_id] = row;
+    }
+
+    /// Retain row order, remove deleted entries, then remap surviving vector offsets.
+    /// Only row IDs change during remapping; R-tree envelopes remain valid.
+    pub fn retain_rows(&mut self, mut keep: impl FnMut(&Row) -> bool) {
+        let mut offsets = Vec::with_capacity(self.rows.len());
+        let mut next_id = 0;
+        self.rows.retain(|row| {
+            let row_id = offsets.len();
+            if keep(row) {
+                offsets.push(next_id);
+                next_id += 1;
+                true
+            } else {
+                for index in self.typed_indexes.values_mut() {
+                    if let IndexType::GiST(index) = index {
+                        let value = row.get(&index.column_name).unwrap_or(&Value::Null);
+                        index.remove(row_id, value);
+                    }
+                }
+                offsets.push(usize::MAX);
+                false
+            }
+        });
+        if self.rows.len() != offsets.len() {
+            for index in self.typed_indexes.values_mut() {
+                if let IndexType::GiST(index) = index {
+                    index.remap_row_ids(&offsets);
+                }
+            }
+        }
+    }
+
     pub fn rebuild_gist_indexes(&mut self) {
         for def in &self.schema.gist_indexes {
             let index = self
@@ -243,12 +315,12 @@ impl Table {
                     ))
                 });
             if let IndexType::GiST(index) = index {
-                index.clear();
-                for (id, row) in self.rows.iter().enumerate() {
-                    if let Some(value) = row.get(&def.column) {
-                        index.insert(id, value);
-                    }
-                }
+                index.bulk_load(
+                    self.rows
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(id, row)| row.get(&def.column).map(|value| (id, value))),
+                );
             }
         }
     }

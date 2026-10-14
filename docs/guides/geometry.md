@@ -215,17 +215,43 @@ outer row. Other joins fall back to ordinary evaluation. To accelerate a spatial
 join, put the indexed table on the right, as in the example. Nearest-neighbor
 `ORDER BY ST_Distance(...)` sorts exact distances; it does not use a KNN index path.
 
-INSERT (including Python/direct bulk insert) adds entries incrementally. UPDATE,
-DELETE, and replacement rebuild GiST entries because row IDs are vector offsets;
-this favors correctness for small facility datasets. Geometry schema and GiST
-definitions are persisted in a sidecar metadata key, so existing table metadata
-remains readable. Indexes rebuild on reopen and are included in transaction
-snapshots for rollback.
+Single-row INSERT adds entries incrementally. UPDATE removes the entry keyed by
+row ID and old geometry bounds, then inserts the changed value. DELETE and
+replacement remove affected entries and adjust surviving vector offsets in place,
+preserving row order and tree bounds. Each entry caches its bounding box; candidate
+traversal never recomputes it. SRID counts remain accurate after edits for KNN.
+
+CREATE INDEX, reopen, and ordinary multi-row SQL/Python/direct insert batches use
+`RTree::bulk_load` (rstar's OMT packing algorithm). Appended batches reuse existing
+cached bounds. Geometry schema and GiST definitions remain in the sidecar metadata
+key. Transaction snapshots include the tree and SRID counts, so ROLLBACK restores
+matching rows and indexes. SQL savepoints are not supported.
 
 `GiSTIndex::stats()` exposes actual `search_count` and `candidates_returned`
-counters. `tests/spatial_index_test.rs` checks them, verifies the three-zone/six-
+counters plus `full_rebuild_count`, `bulk_load_count`, `insert_count`, and
+`remove_count`. Maintenance counts are restored with transaction snapshots.
+`tests/spatial_index_maintenance_test.rs` checks 10,000 seeded mixed operations
+against full scans every 25 operations, rollback, duplicate bounds, NULL/empty
+values, SRID changes, and bulk/reopen paths. It also proves single-row UPDATE
+performs one removal and insertion with no rebuild. `tests/spatial_index_test.rs`
+checks search counters, verifies the three-zone/six-
 device fixture, and compares a 10,000-point/500-polygon indexed join with a full
 scan, including all shared-edge exclusions.
+
+On 2026-10-14, Criterion measured the following for 100,000 seeded random points
+on Windows x64, Intel Core Ultra 9 285, Rust 1.98.0, default release profile
+(10 samples, 1-second warmup, 3-second measurement):
+
+| Operation | Base `57068ef` | Incremental maintenance / bulk load | Speedup |
+| --- | ---: | ---: | ---: |
+| Single-row UPDATE on an indexed table | 172.70 ms | 8.24 ms | 21.0x |
+| CREATE INDEX: incremental inserts vs. bulk packing | 136.75 ms | 30.42 ms | 4.5x |
+
+These are Criterion point estimates for in-memory executor calls, excluding setup,
+SQL parsing, and disk I/O. UPDATE still includes an O(n) WHERE scan; DELETE still
+requires O(n) row-offset compaction. Reproduce with
+`cargo bench --bench spatial_index_maintenance -- --save-baseline before` at the
+benchmark-only commit `e7ea1e0`, then use `--baseline before` on the changed tree.
 
 `tests/geometry_functions_test.rs` adds independent PROJ 9.8.1 reference
 coordinates (including KFM, zone edges, both hemispheres and high latitudes),
