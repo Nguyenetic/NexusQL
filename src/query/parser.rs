@@ -827,6 +827,10 @@ impl QueryParser {
     pub fn parse(sql: &str) -> Result<Statement> {
         let parser = Self::new();
 
+        if let Some(statement) = crate::changefeed::parse_statement(sql)? {
+            return Ok(Statement::Changefeed(statement));
+        }
+
         // Check for CREATE RELATIONSHIP statement first (custom NexusQL syntax)
         if sql.trim().to_uppercase().starts_with("CREATE RELATIONSHIP") {
             return parser.parse_create_relationship(sql);

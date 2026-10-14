@@ -219,6 +219,9 @@ impl Executor {
     pub fn execute(&mut self, statement: &Statement, params: &QueryParams) -> Result<ResultSet> {
         let _spatial_statement = super::spatial::StatementScope::enter();
         match statement {
+            Statement::Changefeed(_) => Err(crate::NexusError::QueryError(
+                "Changefeed commands require the default storage engine".into(),
+            )),
             Statement::CreateTable {
                 name,
                 columns,
@@ -1155,6 +1158,10 @@ impl Executor {
 
     pub fn get_tables(&self) -> &HashMap<String, Table> {
         &self.tables
+    }
+
+    pub(crate) fn is_transaction_active(&self) -> bool {
+        self.transaction_active
     }
 
     pub fn get_tables_mut(&mut self) -> &mut HashMap<String, Table> {

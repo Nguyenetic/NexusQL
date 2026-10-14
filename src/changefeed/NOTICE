@@ -1,0 +1,10 @@
+Changefeed design reference
+
+SQLite session extension: ext/session/sqlite3session.c
+https://sqlite.org/sessionintro.html
+SQLite is in the public domain.
+
+NexusQL uses the session extension's first-before-image/final-after-image design
+as the model for transaction-scoped row changes. This module is an independent
+Rust implementation; it contains no copied SQLite, DuckDB, PostGIS, or GEOS code.
+Spatial membership calls NexusQL's existing ST_Covers implementation.

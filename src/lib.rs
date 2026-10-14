@@ -1,6 +1,7 @@
 //! NexusSQL - Brain-Inspired Multi-Modal Intelligence Database
 //! PROPRIETARY & CONFIDENTIAL
 
+pub mod changefeed;
 pub mod engine;
 pub mod error;
 pub mod geometry;
@@ -126,6 +127,7 @@ pub use types::{ResultSet, Row, Value};
 /// ```
 pub struct NexusSQL {
     kernel: NexusKernel,
+    changefeeds: changefeed::Changefeeds,
 }
 
 impl NexusSQL {
@@ -152,11 +154,9 @@ impl NexusSQL {
             format!("{}/default", actual_path)
         };
 
-        kernel
-            .register_engine(Box::new(engine::default::DefaultEngine::new(
-                &data_path, is_memory,
-            )?))
-            .await?;
+        let default_engine = engine::default::DefaultEngine::new(&data_path, is_memory)?;
+        let changefeeds = default_engine.changefeeds();
+        kernel.register_engine(Box::new(default_engine)).await?;
         kernel
             .register_engine(Box::new(engine::colbert::ColBERTEngine::new()))
             .await?;
@@ -169,7 +169,10 @@ impl NexusSQL {
             if is_memory { "memory" } else { "disk" }
         );
 
-        Ok(Self { kernel })
+        Ok(Self {
+            kernel,
+            changefeeds,
+        })
     }
 
     pub fn list_engines(&self) -> Vec<String> {

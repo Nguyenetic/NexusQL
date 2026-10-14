@@ -19,15 +19,23 @@ pub struct DefaultEngine {
     /// Defer autocommit persistence until flush. Explicit COMMIT is always
     /// durable according to the configured sync policy, including in bulk mode.
     bulk_mode: Arc<AtomicBool>,
+    changefeeds: crate::changefeed::Changefeeds,
 }
 
 impl DefaultEngine {
     pub fn new(data_path: &str, is_memory: bool) -> Result<Self> {
+        let executor = DurableExecutor::new(data_path, is_memory)?;
+        let changefeeds = executor.changefeeds();
         Ok(Self {
             name: "default".to_string(),
-            executor: Arc::new(RwLock::new(DurableExecutor::new(data_path, is_memory)?)),
+            executor: Arc::new(RwLock::new(executor)),
             bulk_mode: Arc::new(AtomicBool::new(false)),
+            changefeeds,
         })
+    }
+
+    pub fn changefeeds(&self) -> crate::changefeed::Changefeeds {
+        self.changefeeds.clone()
     }
 
     /// Toggle bulk mode. Call flush() to persist deferred autocommits.
