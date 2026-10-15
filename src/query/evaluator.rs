@@ -87,6 +87,27 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
             Parameter::Named(name) => params.get_named(name).cloned().unwrap_or(Value::Null),
         },
 
+        // AND/OR short-circuit, evaluating a cheap operand (no function call
+        // or full-text match) first: `content MATCH q AND project = 'x'`
+        // then tokenizes only rows of project x. Expressions have no side
+        // effects, so the result is unchanged.
+        Expr::BinaryOp {
+            left,
+            op: op @ (BinaryOperator::And | BinaryOperator::Or),
+            right,
+        } => {
+            let (first, second) = if is_costly(left) && !is_costly(right) {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            let decided = *op == BinaryOperator::Or;
+            if to_bool(&evaluate_expr(row, first, params)) == decided {
+                return Value::Boolean(decided);
+            }
+            Value::Boolean(to_bool(&evaluate_expr(row, second, params)))
+        }
+
         Expr::BinaryOp { left, op, right } => {
             let left_val = evaluate_expr(row, left, params);
             let right_val = evaluate_expr(row, right, params);
@@ -137,6 +158,21 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
             // Window functions are evaluated by the executor with partition context
             Value::Null
         }
+    }
+}
+
+/// Whether evaluating `expr` may be expensive (function calls, full-text
+/// matching, subqueries) compared with plain column comparisons.
+fn is_costly(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_) | Expr::Literal(_) | Expr::Parameter(_) | Expr::Wildcard => false,
+        Expr::BinaryOp { left, op, right } => {
+            *op == BinaryOperator::TextMatch || is_costly(left) || is_costly(right)
+        }
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) | Expr::Cast { expr: inner, .. } => {
+            is_costly(inner)
+        }
+        _ => true,
     }
 }
 
