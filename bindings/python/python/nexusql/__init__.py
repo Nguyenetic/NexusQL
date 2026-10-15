@@ -18,6 +18,7 @@ Example:
 
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from typing import Any, Iterator, List, Optional, Sequence
 
@@ -114,6 +115,77 @@ class NexusDB:
     def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> QueryResult:
         """Alias for execute() retained for API compatibility."""
         return self.execute(sql, params)
+
+    def create_fulltext_index(
+        self, table: str, column: str, name: Optional[str] = None
+    ) -> None:
+        """Create (or replace) a FULLTEXT index on one TEXT column.
+
+        Equivalent to ``CREATE INDEX <name> ON <table> USING fulltext (<column>)``.
+        The index is rebuilt from the table when the database is reopened.
+        """
+        _check_identifier(table)
+        _check_identifier(column)
+        name = name or f"{table}_{column}_fts"
+        _check_identifier(name)
+        self.execute(f"CREATE INDEX {name} ON {table} USING fulltext ({column})")
+
+    def search(
+        self,
+        table: str,
+        query: str,
+        *,
+        column: str = "content",
+        select: Sequence[str] = ("*",),
+        where: Optional[str] = None,
+        params: Optional[Sequence[Any]] = None,
+        limit: int = 10,
+        snippet_tokens: Optional[int] = 16,
+        highlight: Sequence[str] = ("[", "]"),
+        ellipsis: str = "...",
+    ) -> List[dict]:
+        """Ranked full-text search, best match first.
+
+        Args:
+            table: table to search.
+            query: FTS5-style query: words, "phrases", prefix*, AND/OR/NOT, ().
+            column: the TEXT column to match (a FULLTEXT index makes it fast;
+                without one the table is scanned).
+            select: columns to return in addition to ``score`` / ``snippet``.
+            where: optional extra SQL filter using ``?`` placeholders, e.g.
+                ``"project = ? AND created >= ?"``.
+            params: values for the ``?`` placeholders in ``where``.
+            limit: maximum number of rows.
+            snippet_tokens: tokens per excerpt; None skips the snippet column.
+            highlight: (open, close) markers around matches in the snippet.
+            ellipsis: marker where the snippet cuts the text.
+
+        Returns:
+            Row dicts with an extra ``score`` (BM25, lower is better, like
+            SQLite FTS5) and, unless disabled, ``snippet``.
+        """
+        _check_identifier(table)
+        _check_identifier(column)
+        for item in select:
+            if item != "*":
+                _check_identifier(item)
+        limit = int(limit)
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
+        columns = ", ".join(select)
+        values: List[Any] = [query]
+        sql = f"SELECT {columns}, bm25({column}, ?) AS score"
+        if snippet_tokens is not None:
+            open_mark, close_mark = highlight
+            sql += f", snippet({column}, ?, ?, ?, ?, ?) AS snippet"
+            values += [query, open_mark, close_mark, ellipsis, int(snippet_tokens)]
+        sql += f" FROM {table} WHERE {column} MATCH ?"
+        values.append(query)
+        if where:
+            sql += f" AND ({where})"
+            values += list(params or [])
+        sql += f" ORDER BY score LIMIT {limit}"
+        return self.execute(sql, values).rows
 
     def changes(self, feed: str, since: Optional[int] = None) -> List[dict]:
         """Read committed events strictly after a cursor; None reads retained history.
@@ -280,6 +352,15 @@ class PreparedStatement:
     def close(self) -> None:
         # No native resource to release until NexusQL exposes prepared handles
         pass
+
+
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_identifier(name: str) -> None:
+    """Reject anything but a bare SQL identifier (helpers splice names into SQL)."""
+    if not isinstance(name, str) or not _IDENTIFIER.match(name):
+        raise ValueError(f"invalid SQL identifier: {name!r}")
 
 
 def connect(db_path: str) -> NexusDB:

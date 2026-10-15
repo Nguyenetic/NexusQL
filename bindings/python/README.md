@@ -55,14 +55,56 @@ See [geometry functions, semantics and index behavior](../../docs/guides/geometr
 - `close()`, `is_open()`, and database context manager: manage connection lifetime.
 
 `QueryResult.rows` is a list of dictionaries, `row_count` is its length, and
-`fields` contains the first row's column names. `rows_affected` reflects the core
-engine's result; some SQL DML paths currently return zero. `bulk_insert` returns
-the actual count.
+`fields` contains the first row's column names. `rows_affected` is the number of
+rows an INSERT, UPDATE or DELETE changed (the row count for SELECT).
+`bulk_insert` returns the actual count. Parameters may be written `$1, $2` or,
+as with `sqlite3`, `?` (bound in order of appearance).
 
 The wrapper also provides `execute_many`, `prepare`, and `transaction` helpers.
 `prepare` currently resends SQL on each call; it does not cache a native plan.
 Transaction behavior follows the core engine. Each database owns a Tokio runtime;
 operations are synchronous and release the Python GIL while the engine executes.
+
+## Full-text search
+
+`CREATE INDEX ... USING fulltext (column)` adds a keyword index with BM25
+ranking that can replace SQLite FTS5 tables. Queries use FTS5 syntax: words,
+`"phrases"`, `prefix*`, `AND`/`OR`/`NOT` and parentheses.
+
+```python
+from nexusql import NexusDB
+
+with NexusDB("./amem") as db:
+    db.execute("CREATE TABLE messages (id INT, project TEXT, created TEXT, content TEXT)")
+    db.create_fulltext_index("messages", "content")
+    db.execute("INSERT INTO messages VALUES (?, ?, ?, ?)", [1, "nexus", "2026-10-01", "WAL recovery notes"])
+
+    # Helper: ranked, filtered, with highlighted excerpts.
+    hits = db.search(
+        "messages", "wal OR checkpoint",
+        select=["id", "project"],
+        where="project = ? AND created >= ?", params=["nexus", "2026-10-01"],
+        limit=20, snippet_tokens=12, highlight=("[", "]"),
+    )
+    # [{"id": 1, "project": "nexus", "score": -0.28..., "snippet": "[WAL] recovery notes"}]
+
+    # The same in SQL:
+    db.execute(
+        "SELECT id, bm25(content, ?) AS score, snippet(content, ?) AS s FROM messages "
+        "WHERE content MATCH ? AND project = ? ORDER BY score LIMIT 20",
+        ["wal", "wal", "wal", "nexus"],
+    )
+```
+
+- `create_fulltext_index(table, column, name=None)`: one TEXT column per index.
+- `search(table, query, *, column="content", select=("*",), where=None,
+  params=None, limit=10, snippet_tokens=16, highlight=("[", "]"),
+  ellipsis="...")`: rows ordered best first, with `score` (BM25; lower is better,
+  as in FTS5) and `snippet` (omitted when `snippet_tokens=None`). `where` is a SQL
+  filter using `?` placeholders bound from `params`.
+
+See [full-text search](../../docs/features/full-text-search.md) for the query
+syntax, tokenizer, ranking and durability details.
 
 ## GeoPackage and GeoJSON (`nexusql.gpkg`, `nexusql.geojson`)
 
