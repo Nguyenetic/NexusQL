@@ -4,7 +4,7 @@
 //! Every caller must use this one implementation: index candidates are only
 //! exact when the posting lists and the per-row predicate see identical terms.
 //!
-//! Rules (documented in `docs/features/full-text-search.md`):
+//! Rules (documented in `docs/guides/full-text-search.md`):
 //! - A word is a maximal run of alphanumeric characters (Unicode letters and
 //!   digits, plus combining marks). Everything else separates words.
 //! - Words are case-folded and compatibility-normalized (NFKD): fullwidth

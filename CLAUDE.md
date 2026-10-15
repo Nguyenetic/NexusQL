@@ -116,6 +116,7 @@ npm run build:native -- --target x86_64-pc-windows-msvc
 - HNSW - Hierarchical Navigable Small World for vector search (1578× speedup)
 - GIN - Generalized Inverted Index for arrays/JSON/full-text
 - GiST - Generalized Search Tree for spatial/geometric data
+- FULLTEXT - Inverted text index (`src/fulltext/`): `col MATCH 'q'`, `bm25()`, `snippet()`; definition persisted, postings rebuilt on open. See `docs/guides/full-text-search.md`
 - BRIN - Block Range Index for sequential data (100-1000× compression)
 
 **Vector Search** (`src/vector/`)

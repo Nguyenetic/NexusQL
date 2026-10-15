@@ -10,7 +10,7 @@
 //
 // The legacy tsvector types below are standalone helpers. SQL full-text search
 // (`CREATE INDEX ... USING FULLTEXT`, `MATCH`, `bm25()`, `snippet()`) lives in
-// the submodules; see docs/features/full-text-search.md.
+// the submodules; see docs/guides/full-text-search.md.
 
 pub mod index;
 pub mod query;

@@ -93,6 +93,7 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 - **HNSW** - Vector similarity search (1578× faster)
 - **GIN** - Arrays, JSON, full-text search
 - **GiST** - Geometric/spatial data
+- **FULLTEXT** - Keyword search with BM25 ranking, phrases, prefixes and snippets ([guide](docs/guides/full-text-search.md))
 - **BRIN** - Time-series (100-1000× compression)
 
 ### Query Features
@@ -101,7 +102,7 @@ NexusQL is a high-performance, PostgreSQL-compatible database engine written in 
 - **Joins** - INNER, OUTER, CROSS, NATURAL with 3 algorithms (Hash, Merge, Nested Loop)
 - **CTEs** - WITH RECURSIVE with cycle detection
 - **Subqueries** - Scalar, EXISTS, IN
-- **Full-Text Search** - tsvector, tsquery, ts_rank, stemming
+- **Full-Text Search** - `col MATCH 'query'`, `bm25()`, `snippet()`, `highlight()` with FTS5-style queries and Unicode/CJK tokenization
 
 ### Data Organization
 - **Table Partitioning** - Range, List, Hash with partition pruning (67% scan reduction)
@@ -390,6 +391,7 @@ Native Rust library with async support and zero-copy operations.
 - 🔍 [Vector Search](docs/guides/vector-search.md) - Semantic search with HNSW
 - 💾 [Transactions](docs/guides/transactions.md) - Usage patterns; [current disk durability contract](docs/development/durability.md)
 - 📊 [Batch Operations](docs/guides/batch-operations.md) - 10-100× faster inserts
+- [Full-Text Search](docs/guides/full-text-search.md) - BM25 keyword search, snippets, SQLite FTS5 migration
 
 #### Performance
 - ⚡ [Performance Optimization](docs/guides/performance.md) - Tuning and best practices

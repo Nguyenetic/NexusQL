@@ -103,7 +103,7 @@ with NexusDB("./amem") as db:
   as in FTS5) and `snippet` (omitted when `snippet_tokens=None`). `where` is a SQL
   filter using `?` placeholders bound from `params`.
 
-See [full-text search](../../docs/features/full-text-search.md) for the query
+See [full-text search](../../docs/guides/full-text-search.md) for the query
 syntax, tokenizer, ranking and durability details.
 
 ## GeoPackage and GeoJSON (`nexusql.gpkg`, `nexusql.geojson`)
