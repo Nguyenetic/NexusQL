@@ -499,10 +499,8 @@ fn parity_corpus() -> Vec<(i64, String, Option<String>, Option<String>)> {
                         .join(" "),
                 ),
             };
-            // Titles sit on rows with content, except 123: a title hit whose
-            // content is NULL (bm25 NULL) makes the postings ranking decline.
-            let title = (id % 3 == 0 && (content.is_some() || id == 123))
-                .then(|| format!("note {} {}", WORDS[id % WORDS.len()], id));
+            // Some titles sit on rows whose content is NULL (bm25 NULL).
+            let title = (id % 3 == 0).then(|| format!("note {} {}", WORDS[id % WORDS.len()], id));
             (id as i64, format!("p{}", id % 4), title, content)
         })
         .collect()
@@ -550,12 +548,14 @@ async fn postings_ranking_matches_tokenized_rows() {
         "SELECT id, highlight(content, $1) AS h, bm25(content, $1) AS score FROM {t} \
          WHERE content MATCH $1 AND id > 20 ORDER BY id",
         "SELECT COUNT(*) AS n FROM {t} WHERE content MATCH $1",
-        // ORDER BY over NULL and FLOAT keys has no defined order (Value's Ord
-        // treats mixed types as Equal), so these shapes filter NULL content.
+        // Title hits with NULL content rank with a NULL key: NULLs sort first
+        // ascending and last descending.
         "SELECT id, bm25(content, $1) AS score FROM {t} \
-         WHERE (content MATCH $1 OR project = 'p2') AND content IS NOT NULL ORDER BY score LIMIT 10",
+         WHERE content MATCH $1 OR project = 'p2' ORDER BY score LIMIT 10",
         "SELECT id, bm25(content, $1) AS score FROM {t} WHERE (content MATCH $1 OR title MATCH $1) \
-         AND project <> 'p0' AND content IS NOT NULL ORDER BY score LIMIT 8",
+         AND project <> 'p0' ORDER BY score LIMIT 8",
+        "SELECT id, fts_score(content, $1) AS score FROM {t} \
+         WHERE content MATCH $1 OR title MATCH $1 ORDER BY score DESC LIMIT 12",
         "SELECT id, fts_score(title, $1) AS score FROM {t} WHERE title MATCH $1 \
          ORDER BY score DESC LIMIT 3",
     ];
@@ -606,7 +606,7 @@ async fn postings_ranking_matches_tokenized_rows() {
         .await
         .unwrap();
         db.execute(&format!(
-            "UPDATE {table} SET content = NULL WHERE id >= 300 AND id < 330 AND title IS NULL"
+            "UPDATE {table} SET content = NULL WHERE id >= 300 AND id < 330"
         ))
         .await
         .unwrap();
