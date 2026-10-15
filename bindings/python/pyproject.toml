@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "nexusql"
-version = "2.3.0"
+version = "2.3.1"
 description = "AI-Native, PostgreSQL-compatible database with Python support"
 readme = "README.md"
 requires-python = ">=3.8"
