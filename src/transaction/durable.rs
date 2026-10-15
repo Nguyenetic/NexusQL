@@ -18,7 +18,10 @@ enum Undo {
     Snapshot(Option<Table>),
     /// The statement only appended rows: truncate back instead of cloning
     /// the whole table (and its indexes) before every INSERT.
-    Append { rows: usize, next_auto_increment_id: i64 },
+    Append {
+        rows: usize,
+        next_auto_increment_id: i64,
+    },
 }
 
 impl Undo {
@@ -131,10 +134,20 @@ impl DurableExecutor {
             | Statement::Delete { from: name, .. } => Some(name.as_str()),
             _ => None,
         };
-        let before = match (statement, touched.and_then(|name| self.get_tables().get(name))) {
+        let before = match (
+            statement,
+            touched.and_then(|name| self.get_tables().get(name)),
+        ) {
             (
                 Statement::Insert {
-                    on_conflict: None | Some(OnConflict::Ignore | OnConflict::Abort | OnConflict::Fail | OnConflict::Rollback),
+                    on_conflict:
+                        None
+                        | Some(
+                            OnConflict::Ignore
+                            | OnConflict::Abort
+                            | OnConflict::Fail
+                            | OnConflict::Rollback,
+                        ),
                     ..
                 },
                 Some(table),
@@ -190,9 +203,17 @@ impl DurableExecutor {
                 }
             }
             table.coerce_values(&mut values)?;
-            prepared.push(Row::new(table.columns.clone(), values));
+            prepared.push(values);
         }
+        // Validation passed; ids are only consumed by rows that are inserted.
         let before = Undo::append(table);
+        let prepared: Vec<Row> = prepared
+            .into_iter()
+            .map(|mut values| {
+                table.assign_auto_increment(&mut values);
+                Row::new(table.columns.clone(), values)
+            })
+            .collect();
         let count = prepared.len();
         table.rows.reserve(count);
         // Batch insert so geometry GiST indexes bulk-load instead of inserting one by one.

@@ -556,16 +556,7 @@ impl Executor {
                         t.coerce_values(&mut insert_values)?;
 
                         // AUTO_INCREMENT: Generate ID if the column is NULL
-                        if let Some(ref auto_col) = t.auto_increment_column {
-                            if let Some(auto_col_idx) = t.columns.iter().position(|c| c == auto_col)
-                            {
-                                if insert_values[auto_col_idx] == Value::Null {
-                                    insert_values[auto_col_idx] =
-                                        Value::Integer(t.next_auto_increment_id);
-                                    t.next_auto_increment_id += 1;
-                                }
-                            }
-                        }
+                        t.assign_auto_increment(&mut insert_values);
 
                         // Handle ON CONFLICT / INSERT OR ... modes
                         let row = Row::new(insert_columns.clone(), insert_values.clone());

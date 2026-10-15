@@ -232,6 +232,20 @@ impl Table {
         }
     }
 
+    /// Give a NULL AUTO_INCREMENT value the next id. Explicit ids are kept and
+    /// do not move the counter (PostgreSQL sequence semantics).
+    pub fn assign_auto_increment(&mut self, values: &mut [Value]) {
+        let Some(column) = &self.auto_increment_column else {
+            return;
+        };
+        if let Some(i) = self.columns.iter().position(|c| c == column) {
+            if values.get(i) == Some(&Value::Null) {
+                values[i] = Value::Integer(self.next_auto_increment_id);
+                self.next_auto_increment_id += 1;
+            }
+        }
+    }
+
     /// Create an index on a column
     pub fn create_index(&mut self, column_name: &str) -> Result<()> {
         let column_idx = self

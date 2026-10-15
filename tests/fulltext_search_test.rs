@@ -558,3 +558,51 @@ async fn killed_process_recovers_committed_text_only() {
         .unwrap();
     assert_eq!(ids(&rust), [1], "committed update and delete are reflected");
 }
+
+#[tokio::test]
+async fn failed_insert_statement_rolls_back_rows_and_index() {
+    let db = NexusSQL::new(":memory:").await.unwrap();
+    db.execute("CREATE TABLE notes (id SERIAL, body TEXT, geom GEOMETRY)")
+        .await
+        .unwrap();
+    db.execute("CREATE INDEX notes_fts ON notes USING fulltext (body)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO notes (body) VALUES ('kept walrus')")
+        .await
+        .unwrap();
+    for in_transaction in [false, true] {
+        if in_transaction {
+            db.execute("BEGIN").await.unwrap();
+        }
+        // The second row's WKT is invalid after the first row was appended.
+        let error = db
+            .execute_with_params(
+                "INSERT INTO notes (body, geom) VALUES ($1, $2), ($3, $4)",
+                Some(vec![
+                    Value::Text("orphan walrus".into()),
+                    Value::Text("POINT(1 1)".into()),
+                    Value::Text("second".into()),
+                    Value::Text("NOT WKT".into()),
+                ]),
+            )
+            .await;
+        assert!(error.is_err());
+        let result = db
+            .execute("SELECT id FROM notes WHERE body MATCH 'walrus'")
+            .await
+            .unwrap();
+        assert_eq!(ids(&result), [1], "in transaction: {in_transaction}");
+        if in_transaction {
+            db.execute("COMMIT").await.unwrap();
+        }
+    }
+    db.execute("INSERT INTO notes (body) VALUES ('next walrus')")
+        .await
+        .unwrap();
+    let result = db
+        .execute("SELECT id FROM notes WHERE body MATCH 'walrus'")
+        .await
+        .unwrap();
+    assert_eq!(ids(&result), [1, 2], "auto-increment restored");
+}

@@ -822,6 +822,15 @@ impl QueryParser {
     }
 
     /// Check if the original SQL has AUTOINCREMENT for a specific column
+    /// PostgreSQL SERIAL / BIGSERIAL / SMALLSERIAL: an auto-increment integer.
+    fn is_serial(data_type: &sql_ast::DataType) -> bool {
+        matches!(data_type, sql_ast::DataType::Custom(name, args)
+            if args.is_empty()
+                && ["SERIAL", "BIGSERIAL", "SMALLSERIAL", "SERIAL4", "SERIAL8", "SERIAL2"]
+                    .iter()
+                    .any(|s| name.to_string().eq_ignore_ascii_case(s)))
+    }
+
     fn has_autoincrement_for_column(sql: &str, column_name: &str) -> bool {
         let sql_upper = sql.to_uppercase();
 
@@ -974,7 +983,8 @@ impl QueryParser {
                         // sqlparser-rs doesn't handle AUTOINCREMENT well, so we detect it directly
                         let col_name = col.name.to_string();
                         let is_autoincrement =
-                            Self::has_autoincrement_for_column(original_sql, &col_name);
+                            Self::has_autoincrement_for_column(original_sql, &col_name)
+                                || Self::is_serial(&col.data_type);
 
                         ColumnDef {
                             name: col_name,
@@ -2255,6 +2265,9 @@ impl QueryParser {
             sql_ast::DataType::Custom(obj_name, args) => {
                 if obj_name.to_string().eq_ignore_ascii_case("GEOMETRY") {
                     return DataType::Geometry;
+                }
+                if Self::is_serial(dt) {
+                    return DataType::Integer;
                 }
                 if obj_name.to_string().to_uppercase() == "VECTOR" && !args.is_empty() {
                     // Extract dimension from VECTOR(384)
