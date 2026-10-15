@@ -60,7 +60,9 @@ to multiple tables in one explicit transaction commit together.
 
 Until COMMIT, changes and the rollback snapshot live in the executor's memory.
 Neither sled's main files nor the committed WAL overlay receives them.
-ROLLBACK discards them. Statement errors restore the affected table; direct bulk
+ROLLBACK discards them. Statement errors restore the affected table (an
+append-only INSERT is undone by truncating back to its previous row count and
+auto-increment counter, other statements from a snapshot of the table); direct bulk
 insert validates all geometry rows before inserting any. COMMIT failure retains
 the active transaction and its rollback snapshot. An I/O failure during WAL write
 or sync can leave an **uncertain commit**: reopening determines whether the full
@@ -73,11 +75,14 @@ committed prefix is replayed into a committed key overlay before tables load.
 No recovery of arbitrary corruption of earlier acknowledged commits is promised;
 an invalid complete WAL file header is an error, not silently erased data.
 
-Geometry values, column types, GiST definitions, and auto-increment metadata use
-the same redo transaction as row chunks. GiST trees rebuild from recovered rows,
-so row-offset changes cannot leave persisted stale index entries. Other index
-types retain their existing persistence limitations; this change does not add
-persistence for B-Tree/HNSW/GIN/BRIN definitions. Existing pre-WAL sled table keys
+Geometry values, column types, GiST and FULLTEXT definitions, and auto-increment
+metadata use the same redo transaction as row chunks. GiST trees and full-text
+postings rebuild from recovered rows, so row-offset changes cannot leave persisted
+stale index entries (see [full-text search](../guides/full-text-search.md)). The
+FULLTEXT definitions were appended to the schema value later; schemas written
+before them still decode. Other index types retain their existing persistence
+limitations; this change does not add persistence for B-Tree/HNSW/GIN/BRIN
+definitions. Existing pre-WAL sled table keys
 remain readable without migration.
 
 ## Configuration and bulk loading

@@ -87,6 +87,27 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
             Parameter::Named(name) => params.get_named(name).cloned().unwrap_or(Value::Null),
         },
 
+        // AND/OR short-circuit, evaluating a cheap operand (no function call
+        // or full-text match) first: `content MATCH q AND project = 'x'`
+        // then tokenizes only rows of project x. Expressions have no side
+        // effects, so the result is unchanged.
+        Expr::BinaryOp {
+            left,
+            op: op @ (BinaryOperator::And | BinaryOperator::Or),
+            right,
+        } => {
+            let (first, second) = if is_costly(left) && !is_costly(right) {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            let decided = *op == BinaryOperator::Or;
+            if to_bool(&evaluate_expr(row, first, params)) == decided {
+                return Value::Boolean(decided);
+            }
+            Value::Boolean(to_bool(&evaluate_expr(row, second, params)))
+        }
+
         Expr::BinaryOp { left, op, right } => {
             let left_val = evaluate_expr(row, left, params);
             let right_val = evaluate_expr(row, right, params);
@@ -137,6 +158,21 @@ pub fn evaluate_expr(row: &Row, expr: &Expr, params: &QueryParams) -> Value {
             // Window functions are evaluated by the executor with partition context
             Value::Null
         }
+    }
+}
+
+/// Whether evaluating `expr` may be expensive (function calls, full-text
+/// matching, subqueries) compared with plain column comparisons.
+fn is_costly(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_) | Expr::Literal(_) | Expr::Parameter(_) | Expr::Wildcard => false,
+        Expr::BinaryOp { left, op, right } => {
+            *op == BinaryOperator::TextMatch || is_costly(left) || is_costly(right)
+        }
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) | Expr::Cast { expr: inner, .. } => {
+            is_costly(inner)
+        }
+        _ => true,
     }
 }
 
@@ -256,15 +292,13 @@ fn evaluate_binary_op(left: &Value, op: &BinaryOperator, right: &Value) -> Value
             Value::Boolean(left_bool || right_bool)
         }
         BinaryOperator::Like => {
-            // Simple LIKE implementation
             if let (Value::Text(text), Value::Text(pattern)) = (left, right) {
-                let pattern_simple = pattern.replace('%', ".*").replace('_', ".");
-                let re = regex::Regex::new(&pattern_simple).ok();
-                Value::Boolean(re.map(|r| r.is_match(text)).unwrap_or(false))
+                Value::Boolean(like_match(text, pattern))
             } else {
                 Value::Boolean(false)
             }
         }
+        BinaryOperator::TextMatch => crate::fulltext::sql::text_match(left, right),
         BinaryOperator::Matches => {
             // NexusSQL custom MATCHES operator
             if let (Value::Text(text), Value::Text(pattern)) = (left, right) {
@@ -299,6 +333,58 @@ fn evaluate_binary_op(left: &Value, op: &BinaryOperator, right: &Value) -> Value
             }
         }
     }
+}
+
+/// SQL LIKE over the whole string: `%` matches any sequence, `_` any one
+/// character, and backslash escapes the next character (the PostgreSQL
+/// default). Case-sensitive, as in PostgreSQL.
+fn like_match(text: &str, pattern: &str) -> bool {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Part {
+        Any,
+        One,
+        Char(char),
+    }
+    let mut parts = Vec::new();
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        parts.push(match c {
+            '%' => Part::Any,
+            '_' => Part::One,
+            '\\' => Part::Char(chars.next().unwrap_or('\\')),
+            c => Part::Char(c),
+        });
+    }
+    let text: Vec<char> = text.chars().collect();
+    // Iterative wildcard matching with single-star backtracking: O(n*m) worst case.
+    let (mut t, mut p) = (0, 0);
+    let (mut star, mut star_t) = (None, 0);
+    while t < text.len() {
+        match parts.get(p) {
+            Some(Part::One) => {
+                t += 1;
+                p += 1;
+            }
+            Some(Part::Char(c)) if *c == text[t] => {
+                t += 1;
+                p += 1;
+            }
+            Some(Part::Any) => {
+                star = Some(p);
+                star_t = t;
+                p += 1;
+            }
+            _ => match star {
+                Some(s) => {
+                    p = s + 1;
+                    star_t += 1;
+                    t = star_t;
+                }
+                None => return false,
+            },
+        }
+    }
+    parts[p..].iter().all(|part| *part == Part::Any)
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
@@ -364,6 +450,9 @@ fn to_bool(val: &Value) -> bool {
 
 /// Evaluate function calls (built-in functions)
 fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams) -> Value {
+    if let Some(value) = crate::fulltext::sql::evaluate_function(row, name, args, params) {
+        return value;
+    }
     let name_upper = name.to_uppercase();
     if name_upper.starts_with("ST_") {
         if let Some(predicate) = crate::geometry::prepared::Predicate::from_name(&name_upper) {
@@ -1171,6 +1260,24 @@ mod tests {
     }
 
     // ---- Original evaluator tests continue ----
+
+    #[test]
+    fn like_matches_whole_string_with_literal_metacharacters() {
+        assert!(like_match("alpha", "alp%"));
+        assert!(!like_match("xalphax", "alp%"));
+        assert!(like_match("xalphax", "%alph%"));
+        assert!(like_match("a.c", "a.c"));
+        assert!(!like_match("abc", "a.c"));
+        assert!(like_match("abc", "a_c"));
+        assert!(like_match("(x)", "%(%"));
+        assert!(like_match("100%", "100\\%"));
+        assert!(!like_match("1000", "100\\%"));
+        assert!(like_match("", "%"));
+        assert!(!like_match("", "_"));
+        assert!(like_match("東京都", "東%都"));
+        assert!(like_match("aXbYc", "a%b%c"));
+        assert!(!like_match("Alpha", "alpha"));
+    }
 
     #[test]
     fn test_evaluate_eq() {

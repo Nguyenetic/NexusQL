@@ -7,6 +7,19 @@
 // - Functions: to_tsvector, to_tsquery, plainto_tsquery, ts_rank
 // - Stemming: Basic word normalization
 // - Stop words: Common word filtering
+//
+// The legacy tsvector types below are standalone helpers. SQL full-text search
+// (`CREATE INDEX ... USING FULLTEXT`, `MATCH`, `bm25()`, `snippet()`) lives in
+// the submodules; see docs/guides/full-text-search.md.
+
+pub mod index;
+pub mod query;
+pub mod sql;
+pub mod tokenizer;
+
+pub use index::FullTextIndex;
+pub use query::{CorpusStats, Query, QueryError};
+pub use tokenizer::{tokenize, Mode, Token};
 
 use crate::Result;
 

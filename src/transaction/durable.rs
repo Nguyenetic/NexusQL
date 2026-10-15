@@ -2,7 +2,7 @@
 //! The engine holds its executor write lock for every call, including checkpoint.
 
 use crate::engine::Executor;
-use crate::query::ast::{Statement, TransactionOp};
+use crate::query::ast::{OnConflict, Statement, TransactionOp};
 use crate::query::evaluator::QueryParams;
 use crate::storage::disk::DiskStorage;
 use crate::storage::wal::SyncPolicy;
@@ -11,6 +11,27 @@ use crate::types::{ResultSet, Row, Value};
 use crate::{NexusError, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// How to undo one statement if it, or its autocommit, fails.
+enum Undo {
+    /// The table as it was (None: it did not exist).
+    Snapshot(Option<Box<Table>>),
+    /// The statement only appended rows: truncate back instead of cloning
+    /// the whole table (and its indexes) before every INSERT.
+    Append {
+        rows: usize,
+        next_auto_increment_id: i64,
+    },
+}
+
+impl Undo {
+    fn append(table: &Table) -> Self {
+        Undo::Append {
+            rows: table.rows.len(),
+            next_auto_increment_id: table.next_auto_increment_id,
+        }
+    }
+}
 
 pub(crate) struct DurableExecutor {
     executor: Executor,
@@ -113,7 +134,26 @@ impl DurableExecutor {
             | Statement::Delete { from: name, .. } => Some(name.as_str()),
             _ => None,
         };
-        let before = touched.and_then(|name| self.get_tables().get(name).cloned());
+        let before = match (
+            statement,
+            touched.and_then(|name| self.get_tables().get(name)),
+        ) {
+            (
+                Statement::Insert {
+                    on_conflict:
+                        None
+                        | Some(
+                            OnConflict::Ignore
+                            | OnConflict::Abort
+                            | OnConflict::Fail
+                            | OnConflict::Rollback,
+                        ),
+                    ..
+                },
+                Some(table),
+            ) => Undo::append(table),
+            (_, table) => Undo::Snapshot(table.cloned().map(Box::new)),
+        };
         match self.executor.execute(statement, params) {
             Ok(result) => {
                 if let Some(name) = touched {
@@ -163,11 +203,17 @@ impl DurableExecutor {
                 }
             }
             table.coerce_values(&mut values)?;
-            prepared.push(Row::new(table.columns.clone(), values));
+            prepared.push(values);
         }
-        let before = (self.changefeeds.enabled()
-            || (!self.disk.is_memory() && !self.active && !bulk))
-            .then(|| table.clone());
+        // Validation passed; ids are only consumed by rows that are inserted.
+        let before = Undo::append(table);
+        let prepared: Vec<Row> = prepared
+            .into_iter()
+            .map(|mut values| {
+                table.assign_auto_increment(&mut values);
+                Row::new(table.columns.clone(), values)
+            })
+            .collect();
         let count = prepared.len();
         table.rows.reserve(count);
         // Batch insert so geometry GiST indexes bulk-load instead of inserting one by one.
@@ -179,7 +225,7 @@ impl DurableExecutor {
     fn finish_write(
         &mut self,
         name: &str,
-        before: Option<Table>,
+        before: Undo,
         bulk: bool,
         preserve_positions: bool,
     ) -> Result<()> {
@@ -208,11 +254,23 @@ impl DurableExecutor {
         Ok(())
     }
 
-    fn restore(&mut self, name: &str, before: Option<Table>) {
-        if let Some(table) = before {
-            self.executor.get_tables_mut().insert(name.into(), table);
-        } else {
-            self.executor.get_tables_mut().remove(name);
+    fn restore(&mut self, name: &str, before: Undo) {
+        match before {
+            Undo::Snapshot(Some(table)) => {
+                self.executor.get_tables_mut().insert(name.into(), *table);
+            }
+            Undo::Snapshot(None) => {
+                self.executor.get_tables_mut().remove(name);
+            }
+            Undo::Append {
+                rows,
+                next_auto_increment_id,
+            } => {
+                if let Some(table) = self.executor.get_tables_mut().get_mut(name) {
+                    table.truncate_rows(rows);
+                    table.next_auto_increment_id = next_auto_increment_id;
+                }
+            }
         }
     }
 

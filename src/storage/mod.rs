@@ -4,6 +4,7 @@
 pub mod disk;
 pub mod wal;
 
+use crate::fulltext::FullTextIndex;
 use crate::index::{BRINIndex, BTreeIndex, GINIndex, GiSTIndex, HNSWIndex};
 use crate::query::ast::DataType;
 use crate::types::{Row, Value};
@@ -24,6 +25,8 @@ pub enum IndexType {
     GiST(GiSTIndex),
     /// Block Range Index — compact summary index for time-series.
     BRIN(BRINIndex),
+    /// Inverted text index with BM25 statistics (`USING FULLTEXT`).
+    FullText(FullTextIndex),
 }
 
 /// Serializable table data. On-disk format stores just the row *values*
@@ -51,6 +54,40 @@ struct TableData {
 pub struct TableSchema {
     pub column_types: HashMap<String, DataType>,
     pub gist_indexes: Vec<GiSTDefinition>,
+    /// Appended field: `decode` still reads schemas written before it existed.
+    #[serde(default)]
+    pub fulltext_indexes: Vec<FullTextDefinition>,
+}
+
+/// Schema layout before full-text indexes, for reading older databases.
+#[derive(Deserialize)]
+struct TableSchemaV1 {
+    column_types: HashMap<String, DataType>,
+    gist_indexes: Vec<GiSTDefinition>,
+}
+
+impl TableSchema {
+    /// Decode a bincode `table:<name>:schema` value of any known layout.
+    /// bincode is not self-describing, so a missing trailing field fails
+    /// the current layout and is retried as the previous one.
+    pub fn decode(bytes: &[u8]) -> bincode::Result<Self> {
+        bincode::deserialize::<TableSchema>(bytes).or_else(|error| {
+            bincode::deserialize::<TableSchemaV1>(bytes)
+                .map(|old| TableSchema {
+                    column_types: old.column_types,
+                    gist_indexes: old.gist_indexes,
+                    fulltext_indexes: Vec::new(),
+                })
+                .map_err(|_| error)
+        })
+    }
+}
+
+/// Persisted definition of a full-text index; its postings are rebuilt on load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullTextDefinition {
+    pub name: String,
+    pub column: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +203,7 @@ impl<'de> Deserialize<'de> for Table {
             auto_increment_column: data.auto_increment_column,
             next_auto_increment_id: data.next_auto_increment_id.max(1),
         };
-        table.rebuild_gist_indexes();
+        table.rebuild_indexes();
         Ok(table)
     }
 }
@@ -195,6 +232,20 @@ impl Table {
         }
     }
 
+    /// Give a NULL AUTO_INCREMENT value the next id. Explicit ids are kept and
+    /// do not move the counter (PostgreSQL sequence semantics).
+    pub fn assign_auto_increment(&mut self, values: &mut [Value]) {
+        let Some(column) = &self.auto_increment_column else {
+            return;
+        };
+        if let Some(i) = self.columns.iter().position(|c| c == column) {
+            if values.get(i) == Some(&Value::Null) {
+                values[i] = Value::Integer(self.next_auto_increment_id);
+                self.next_auto_increment_id += 1;
+            }
+        }
+    }
+
     /// Create an index on a column
     pub fn create_index(&mut self, column_name: &str) -> Result<()> {
         let column_idx = self
@@ -216,14 +267,18 @@ impl Table {
         let row_idx = self.rows.len();
 
         // Update indexes
-        for (_col_name, index) in &mut self.indexes {
+        for index in self.indexes.values_mut() {
             index.insert(&row, row_idx);
         }
         for index in self.typed_indexes.values_mut() {
-            if let IndexType::GiST(index) = index {
-                if let Some(value) = row.get(&index.column_name) {
-                    index.insert(row_idx, value);
+            match index {
+                IndexType::GiST(index) => {
+                    if let Some(value) = row.get(&index.column_name) {
+                        index.insert(row_idx, value);
+                    }
                 }
+                IndexType::FullText(index) => index.push_row(row.get(&index.column)),
+                _ => {}
             }
         }
 
@@ -245,11 +300,19 @@ impl Table {
             }
         }
         for index in self.typed_indexes.values_mut() {
-            if let IndexType::GiST(index) = index {
-                let column = index.column_name.clone();
-                index.insert_batch(rows.iter().enumerate().filter_map(|(offset, row)| {
-                    row.get(&column).map(|value| (start + offset, value))
-                }));
+            match index {
+                IndexType::GiST(index) => {
+                    let column = index.column_name.clone();
+                    index.insert_batch(rows.iter().enumerate().filter_map(|(offset, row)| {
+                        row.get(&column).map(|value| (start + offset, value))
+                    }));
+                }
+                IndexType::FullText(index) => {
+                    for row in &rows {
+                        index.push_row(row.get(&index.column));
+                    }
+                }
+                _ => {}
             }
         }
         self.rows.extend(rows);
@@ -259,13 +322,19 @@ impl Table {
     pub fn replace_row(&mut self, row_id: usize, row: Row) {
         let old = &self.rows[row_id];
         for index in self.typed_indexes.values_mut() {
-            if let IndexType::GiST(index) = index {
-                let previous = old.get(&index.column_name).unwrap_or(&Value::Null);
-                let next = row.get(&index.column_name).unwrap_or(&Value::Null);
-                if previous != next {
-                    index.remove(row_id, previous);
-                    index.insert(row_id, next);
+            match index {
+                IndexType::GiST(index) => {
+                    let previous = old.get(&index.column_name).unwrap_or(&Value::Null);
+                    let next = row.get(&index.column_name).unwrap_or(&Value::Null);
+                    if previous != next {
+                        index.remove(row_id, previous);
+                        index.insert(row_id, next);
+                    }
                 }
+                IndexType::FullText(index) => {
+                    index.replace_row(row_id, old.get(&index.column), row.get(&index.column))
+                }
+                _ => {}
             }
         }
         self.rows[row_id] = row;
@@ -284,9 +353,15 @@ impl Table {
                 true
             } else {
                 for index in self.typed_indexes.values_mut() {
-                    if let IndexType::GiST(index) = index {
-                        let value = row.get(&index.column_name).unwrap_or(&Value::Null);
-                        index.remove(row_id, value);
+                    match index {
+                        IndexType::GiST(index) => {
+                            let value = row.get(&index.column_name).unwrap_or(&Value::Null);
+                            index.remove(row_id, value);
+                        }
+                        IndexType::FullText(index) => {
+                            index.remove_row(row_id, row.get(&index.column))
+                        }
+                        _ => {}
                     }
                 }
                 offsets.push(usize::MAX);
@@ -295,10 +370,43 @@ impl Table {
         });
         if self.rows.len() != offsets.len() {
             for index in self.typed_indexes.values_mut() {
-                if let IndexType::GiST(index) = index {
-                    index.remap_row_ids(&offsets);
+                match index {
+                    IndexType::GiST(index) => index.remap_row_ids(&offsets),
+                    IndexType::FullText(index) => index.remap_row_ids(&offsets),
+                    _ => {}
                 }
             }
+        }
+    }
+
+    /// Drop rows from offset `len` onwards, maintaining indexes. Undoes an
+    /// append-only statement without snapshotting the table.
+    pub fn truncate_rows(&mut self, len: usize) {
+        if self.rows.len() <= len {
+            return;
+        }
+        let mut seen = 0;
+        self.retain_rows(|_| {
+            seen += 1;
+            seen <= len
+        });
+        for index in self.indexes.values_mut() {
+            index.build_from_rows(&self.rows);
+        }
+    }
+
+    /// Rebuild every index whose definition is persisted in the schema.
+    pub fn rebuild_indexes(&mut self) {
+        self.rebuild_gist_indexes();
+        self.rebuild_fulltext_indexes();
+    }
+
+    pub fn rebuild_fulltext_indexes(&mut self) {
+        for def in &self.schema.fulltext_indexes {
+            let mut index = FullTextIndex::new(def.name.clone(), def.column.clone());
+            index.build(self.rows.iter().map(|row| row.get(&def.column)));
+            self.typed_indexes
+                .insert(def.name.clone(), IndexType::FullText(index));
         }
     }
 
@@ -413,3 +521,58 @@ impl Table {
 }
 pub mod lsm;
 pub use lsm::LSMStorage;
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[derive(Serialize)]
+    struct TableSchemaV1Ser {
+        column_types: HashMap<String, DataType>,
+        gist_indexes: Vec<GiSTDefinition>,
+    }
+
+    #[test]
+    fn schema_written_before_fulltext_indexes_still_decodes() {
+        let old = TableSchemaV1Ser {
+            column_types: [("geom".to_string(), DataType::Geometry)].into(),
+            gist_indexes: vec![GiSTDefinition {
+                name: "g".into(),
+                column: "geom".into(),
+                index_type: crate::index::GiSTIndexType::RTree,
+            }],
+        };
+        let decoded = TableSchema::decode(&bincode::serialize(&old).unwrap()).unwrap();
+        assert_eq!(decoded.gist_indexes.len(), 1);
+        assert_eq!(decoded.column_types["geom"], DataType::Geometry);
+        assert!(decoded.fulltext_indexes.is_empty());
+
+        let current = TableSchema {
+            fulltext_indexes: vec![FullTextDefinition {
+                name: "f".into(),
+                column: "body".into(),
+            }],
+            ..decoded
+        };
+        let round = TableSchema::decode(&bincode::serialize(&current).unwrap()).unwrap();
+        assert_eq!(round.fulltext_indexes[0].column, "body");
+        assert_eq!(round.gist_indexes[0].name, "g");
+        assert!(TableSchema::decode(b"\x01").is_err());
+    }
+
+    #[test]
+    fn table_rebuilds_fulltext_index_from_schema() {
+        let mut table = Table::new("t".into(), vec!["body".into()]);
+        table.schema.fulltext_indexes.push(FullTextDefinition {
+            name: "f".into(),
+            column: "body".into(),
+        });
+        table.insert(Row::new(vec!["body".into()], vec![Value::Text("hello world".into())]));
+        table.rebuild_indexes();
+        let Some(IndexType::FullText(index)) = table.typed_indexes.get("f") else {
+            panic!("index rebuilt");
+        };
+        let query = crate::fulltext::Query::parse("hello").unwrap();
+        assert_eq!(index.search(&query), vec![0]);
+    }
+}

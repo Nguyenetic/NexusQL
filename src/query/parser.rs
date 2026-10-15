@@ -92,6 +92,10 @@ impl Dialect for NexusQLDialect {
         &self,
         parser: &SqlParser,
     ) -> Option<std::result::Result<u8, ParserError>> {
+        // Full-text `column MATCH 'query'` (SQLite FTS5 style) binds like LIKE.
+        if is_match_keyword(&parser.peek_token().token) {
+            return Some(Ok(self.prec_value(Precedence::Like)));
+        }
         // The tokenizer emits <-> as Lt, Arrow. Recognize just this pair so
         // comparisons against negative numbers (e.g. x<-1) keep their meaning.
         if parser.peek_token().token == Token::Lt && parser.peek_nth_token(1).token == Token::Arrow
@@ -109,6 +113,18 @@ impl Dialect for NexusQLDialect {
         expr: &sql_ast::Expr,
         precedence: u8,
     ) -> Option<std::result::Result<sql_ast::Expr, ParserError>> {
+        if is_match_keyword(&parser.peek_token().token) {
+            parser.next_token();
+            return Some(
+                parser
+                    .parse_subexpr(precedence)
+                    .map(|right| sql_ast::Expr::BinaryOp {
+                        left: Box::new(expr.clone()),
+                        op: sql_ast::BinaryOperator::Custom("MATCH".into()),
+                        right: Box::new(right),
+                    }),
+            );
+        }
         if let Err(error) = self.get_next_precedence(parser)? {
             return Some(Err(error));
         }
@@ -124,6 +140,12 @@ impl Dialect for NexusQLDialect {
                 }),
         )
     }
+}
+
+/// An unquoted `MATCH` word in operator position.
+fn is_match_keyword(token: &Token) -> bool {
+    matches!(token, Token::Word(word)
+        if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("match"))
 }
 
 pub struct QueryParser {
@@ -800,6 +822,15 @@ impl QueryParser {
     }
 
     /// Check if the original SQL has AUTOINCREMENT for a specific column
+    /// PostgreSQL SERIAL / BIGSERIAL / SMALLSERIAL: an auto-increment integer.
+    fn is_serial(data_type: &sql_ast::DataType) -> bool {
+        matches!(data_type, sql_ast::DataType::Custom(name, args)
+            if args.is_empty()
+                && ["SERIAL", "BIGSERIAL", "SMALLSERIAL", "SERIAL4", "SERIAL8", "SERIAL2"]
+                    .iter()
+                    .any(|s| name.to_string().eq_ignore_ascii_case(s)))
+    }
+
     fn has_autoincrement_for_column(sql: &str, column_name: &str) -> bool {
         let sql_upper = sql.to_uppercase();
 
@@ -824,6 +855,44 @@ impl QueryParser {
         }
     }
 
+    /// Rewrite each `?` placeholder token to `$1`, `$2`, ... in source order.
+    /// Uses the SQL tokenizer, so `?` inside strings and comments is untouched.
+    /// Returns None when the statement has no `?` placeholder.
+    fn number_question_placeholders(dialect: &NexusQLDialect, sql: &str) -> Option<String> {
+        if !sql.contains('?') {
+            return None;
+        }
+        let tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql)
+            .tokenize_with_location()
+            .ok()?;
+        let marks: Vec<(u64, u64)> = tokens
+            .iter()
+            .filter(|t| matches!(&t.token, Token::Placeholder(p) if p == "?"))
+            .map(|t| (t.location.line, t.location.column))
+            .collect();
+        if marks.is_empty() {
+            return None;
+        }
+        // The tokenizer reports 1-based line and character columns.
+        let mut out = String::with_capacity(sql.len() + marks.len() * 2);
+        let (mut line, mut column, mut next) = (1u64, 1u64, 0usize);
+        for ch in sql.chars() {
+            if ch == '?' && marks.get(next) == Some(&(line, column)) {
+                next += 1;
+                out.push_str(&format!("${next}"));
+            } else {
+                out.push(ch);
+            }
+            if ch == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        Some(out)
+    }
+
     pub fn parse(sql: &str) -> Result<Statement> {
         let parser = Self::new();
 
@@ -840,6 +909,10 @@ impl QueryParser {
         if sql.trim().to_uppercase().starts_with("TRAVERSE") {
             return parser.parse_traverse(sql);
         }
+
+        // `?` placeholders bind in order of appearance, like SQLite/DB-API.
+        let numbered = Self::number_question_placeholders(&parser.dialect, sql);
+        let sql = numbered.as_deref().unwrap_or(sql);
 
         // Preprocess SQL to extract FETCH clauses
         let (preprocessed_sql, fetch_clauses) = Self::preprocess_sql(sql);
@@ -910,7 +983,8 @@ impl QueryParser {
                         // sqlparser-rs doesn't handle AUTOINCREMENT well, so we detect it directly
                         let col_name = col.name.to_string();
                         let is_autoincrement =
-                            Self::has_autoincrement_for_column(original_sql, &col_name);
+                            Self::has_autoincrement_for_column(original_sql, &col_name)
+                                || Self::is_serial(&col.data_type);
 
                         ColumnDef {
                             name: col_name,
@@ -1137,6 +1211,25 @@ impl QueryParser {
         }
     }
 
+    /// LIMIT must be a non-negative integer literal. OFFSET, parameters and
+    /// expressions used to be ignored silently, returning the wrong rows.
+    fn convert_limit(query: &sql_ast::Query) -> Result<Option<usize>> {
+        if query.offset.is_some() {
+            return Err(NexusError::ParseError("OFFSET is not supported".into()));
+        }
+        match &query.limit {
+            None => Ok(None),
+            Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) => {
+                n.parse::<usize>().map(Some).map_err(|_| {
+                    NexusError::ParseError(format!("LIMIT must be a non-negative integer, got {n}"))
+                })
+            }
+            Some(other) => Err(NexusError::ParseError(format!(
+                "LIMIT must be an integer literal, got {other}"
+            ))),
+        }
+    }
+
     fn convert_query(&self, query: &Box<sql_ast::Query>) -> Result<Statement> {
         // Extract CTEs (WITH clause)
         let with = self.convert_with_clause(&query.with)?;
@@ -1169,13 +1262,7 @@ impl QueryParser {
                 };
 
                 // Extract LIMIT
-                let limit = if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) =
-                    &query.limit
-                {
-                    n.parse::<usize>().ok()
-                } else {
-                    None
-                };
+                let limit = Self::convert_limit(query)?;
 
                 // Extract WHERE clause
                 let where_clause = select
@@ -1283,13 +1370,7 @@ impl QueryParser {
                     None
                 };
 
-                let limit = if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) =
-                    &query.limit
-                {
-                    n.parse::<usize>().ok()
-                } else {
-                    None
-                };
+                let limit = Self::convert_limit(query)?;
 
                 Ok(Statement::SetOperation {
                     left: Box::new(left_stmt),
@@ -1487,11 +1568,13 @@ impl QueryParser {
                     right: right_expr,
                 };
 
-                // Handle NOT LIKE by wrapping in a boolean negation
+                // NOT LIKE negates the match, the same way unary NOT is lowered.
                 if *negated {
-                    // For NOT LIKE, we'll use a workaround: compare result to false
-                    // In practice, the evaluator should handle this
-                    Ok(like_expr) // TODO: Add proper NOT support
+                    Ok(Expr::BinaryOp {
+                        left: Box::new(like_expr),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Literal(Value::Boolean(false))),
+                    })
                 } else {
                     Ok(like_expr)
                 }
@@ -1588,10 +1671,74 @@ impl QueryParser {
                 }
             }
 
+            // x IN (a, b) lowers to x = a OR x = b; NOT IN negates it the
+            // same way unary NOT is lowered.
+            sql_ast::Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                let left = self.convert_expr_to_ast(expr)?;
+                let mut any: Option<Expr> = None;
+                for item in list {
+                    let eq = Expr::BinaryOp {
+                        left: Box::new(left.clone()),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(self.convert_expr_to_ast(item)?),
+                    };
+                    any = Some(match any {
+                        Some(previous) => Expr::BinaryOp {
+                            left: Box::new(previous),
+                            op: BinaryOperator::Or,
+                            right: Box::new(eq),
+                        },
+                        None => eq,
+                    });
+                }
+                let any = any.unwrap_or(Expr::Literal(Value::Boolean(false)));
+                Ok(Self::negate_if(any, *negated))
+            }
+
+            // x BETWEEN a AND b lowers to x >= a AND x <= b.
+            sql_ast::Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                let value = self.convert_expr_to_ast(expr)?;
+                let range = Expr::BinaryOp {
+                    left: Box::new(Expr::BinaryOp {
+                        left: Box::new(value.clone()),
+                        op: BinaryOperator::GtEq,
+                        right: Box::new(self.convert_expr_to_ast(low)?),
+                    }),
+                    op: BinaryOperator::And,
+                    right: Box::new(Expr::BinaryOp {
+                        left: Box::new(value),
+                        op: BinaryOperator::LtEq,
+                        right: Box::new(self.convert_expr_to_ast(high)?),
+                    }),
+                };
+                Ok(Self::negate_if(range, *negated))
+            }
+
             _ => Err(NexusError::ParseError(format!(
                 "Unsupported expression in SELECT: {:?}",
                 expr
             ))),
+        }
+    }
+
+    fn negate_if(expr: Expr, negated: bool) -> Expr {
+        if negated {
+            Expr::BinaryOp {
+                left: Box::new(expr),
+                op: BinaryOperator::Eq,
+                right: Box::new(Expr::Literal(Value::Boolean(false))),
+            }
+        } else {
+            expr
         }
     }
 
@@ -1607,7 +1754,10 @@ impl QueryParser {
             sql_ast::BinaryOperator::Or => Ok(BinaryOperator::Or),
             // Vector distance operators (pgvector-compatible)
             sql_ast::BinaryOperator::Spaceship => Ok(BinaryOperator::CosineDistance), // <=> operator
+            // Full-text search: `col MATCH 'q'` and PostgreSQL-style `col @@ 'q'`
+            sql_ast::BinaryOperator::AtAt => Ok(BinaryOperator::TextMatch),
             sql_ast::BinaryOperator::Custom(op_str) => match op_str.as_str() {
+                "MATCH" => Ok(BinaryOperator::TextMatch),
                 "<->" => Ok(BinaryOperator::L2Distance),
                 "<=>" => Ok(BinaryOperator::CosineDistance),
                 "<#>" => Ok(BinaryOperator::InnerProduct),
@@ -1682,13 +1832,7 @@ impl QueryParser {
                     .transpose()?;
 
                 // Convert LIMIT
-                let limit = query.limit.as_ref().and_then(|l| {
-                    if let sql_ast::Expr::Value(sql_ast::Value::Number(n, _)) = l {
-                        n.parse::<usize>().ok()
-                    } else {
-                        None
-                    }
-                });
+                let limit = Self::convert_limit(query)?;
 
                 Ok(SubqueryExpr {
                     columns,
@@ -2122,6 +2266,9 @@ impl QueryParser {
                 if obj_name.to_string().eq_ignore_ascii_case("GEOMETRY") {
                     return DataType::Geometry;
                 }
+                if Self::is_serial(dt) {
+                    return DataType::Integer;
+                }
                 if obj_name.to_string().to_uppercase() == "VECTOR" && !args.is_empty() {
                     // Extract dimension from VECTOR(384)
                     // args is Vec<String>, so parse the first arg
@@ -2141,34 +2288,7 @@ impl QueryParser {
                 let left_expr = self.convert_where_expr(left)?;
                 let right_expr = self.convert_where_expr(right)?;
 
-                let binary_op = match op {
-                    sql_ast::BinaryOperator::Eq => BinaryOperator::Eq,
-                    sql_ast::BinaryOperator::NotEq => BinaryOperator::NotEq,
-                    sql_ast::BinaryOperator::Lt => BinaryOperator::Lt,
-                    sql_ast::BinaryOperator::LtEq => BinaryOperator::LtEq,
-                    sql_ast::BinaryOperator::Gt => BinaryOperator::Gt,
-                    sql_ast::BinaryOperator::GtEq => BinaryOperator::GtEq,
-                    sql_ast::BinaryOperator::And => BinaryOperator::And,
-                    sql_ast::BinaryOperator::Or => BinaryOperator::Or,
-                    // Vector distance operators (pgvector-compatible)
-                    sql_ast::BinaryOperator::Custom(op_str) => match op_str.as_str() {
-                        "<->" => BinaryOperator::L2Distance,
-                        "<=>" => BinaryOperator::CosineDistance,
-                        "<#>" => BinaryOperator::InnerProduct,
-                        _ => {
-                            return Err(NexusError::ParseError(format!(
-                                "Unsupported custom operator: {}",
-                                op_str
-                            )))
-                        }
-                    },
-                    _ => {
-                        return Err(NexusError::ParseError(format!(
-                            "Unsupported operator: {:?}",
-                            op
-                        )))
-                    }
-                };
+                let binary_op = self.convert_binary_op(op)?;
 
                 Ok(Expr::BinaryOp {
                     left: Box::new(left_expr),
@@ -2256,6 +2376,50 @@ impl QueryParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn question_mark_placeholders_bind_in_order() {
+        let stmt = QueryParser::parse("INSERT INTO t VALUES (?, '?', ?) -- ?\n").unwrap();
+        let Statement::Insert { values, .. } = stmt else {
+            panic!("insert");
+        };
+        assert_eq!(
+            values[0],
+            vec![
+                Expr::Parameter(crate::query::ast::Parameter::Positional(1)),
+                Expr::Literal(Value::Text("?".into())),
+                Expr::Parameter(crate::query::ast::Parameter::Positional(2)),
+            ]
+        );
+        let stmt = QueryParser::parse("SELECT id FROM t\nWHERE a = ? AND b = 'it''s ?' AND c = ?")
+            .unwrap();
+        let Statement::Select { where_clause, .. } = stmt else {
+            panic!("select");
+        };
+        let text = format!("{:?}", where_clause.unwrap());
+        assert!(
+            text.contains("Positional(1)") && text.contains("Positional(2)"),
+            "{text}"
+        );
+        assert!(!text.contains("Positional(3)"), "{text}");
+    }
+
+    #[test]
+    fn unsupported_limit_forms_are_errors_not_ignored() {
+        assert!(QueryParser::parse("SELECT * FROM t LIMIT 5").is_ok());
+        for sql in [
+            "SELECT * FROM t LIMIT 5 OFFSET 10",
+            "SELECT * FROM t LIMIT $1",
+            "SELECT * FROM t LIMIT ?",
+            "SELECT a FROM t UNION SELECT a FROM u LIMIT 1 OFFSET 1",
+        ] {
+            let error = QueryParser::parse(sql).unwrap_err().to_string();
+            assert!(
+                error.contains("OFFSET") || error.contains("LIMIT"),
+                "{sql}: {error}"
+            );
+        }
+    }
 
     #[test]
     fn test_parse_select() {

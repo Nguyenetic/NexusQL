@@ -348,6 +348,14 @@ impl ResultSet {
             rows_affected: 0,
         }
     }
+
+    /// No rows, reporting how many rows an INSERT/UPDATE/DELETE changed.
+    pub fn affected(rows_affected: usize) -> Self {
+        Self {
+            rows: vec![],
+            rows_affected,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -388,8 +396,8 @@ mod tests {
 
     #[test]
     fn test_from_f64() {
-        let val: Value = 3.14f64.into();
-        assert_eq!(val, Value::Float(ordered_float::OrderedFloat(3.14)));
+        let val: Value = 2.5f64.into();
+        assert_eq!(val, Value::Float(ordered_float::OrderedFloat(2.5)));
     }
 
     #[test]
@@ -477,8 +485,8 @@ mod tests {
 
     #[test]
     fn test_as_f64() {
-        let val = Value::Float(ordered_float::OrderedFloat(3.14));
-        assert_eq!(val.as_f64(), Some(3.14));
+        let val = Value::Float(ordered_float::OrderedFloat(2.5));
+        assert_eq!(val.as_f64(), Some(2.5));
         assert_eq!(Value::Integer(42).as_f64(), None);
         assert_eq!(Value::Null.as_f64(), None);
     }
@@ -514,7 +522,7 @@ mod tests {
         assert_eq!(Value::Null.type_name(), "Null");
         assert_eq!(Value::Integer(42).type_name(), "Integer");
         assert_eq!(
-            Value::Float(ordered_float::OrderedFloat(3.14)).type_name(),
+            Value::Float(ordered_float::OrderedFloat(2.5)).type_name(),
             "Float"
         );
         assert_eq!(Value::Text("hello".to_string()).type_name(), "Text");

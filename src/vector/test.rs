@@ -100,11 +100,10 @@ mod tests {
 
         let avg_recall = total_recall / num_queries as f32;
 
-        // HNSW is approximate - even basic implementation should find some correct neighbors
-        // TODO: Improve HNSW implementation for better recall (target: 70%+)
-        // Current implementation has graph connectivity issues that limit recall
+        // high_recall() searches with ef=500 over 1000 nodes; anything far
+        // below exact recall means the graph or the search is broken.
         assert!(
-            avg_recall >= 0.03,
+            avg_recall >= 0.8,
             "HNSW average recall too low: {}. Even approximate search should find some correct neighbors.",
             avg_recall
         );

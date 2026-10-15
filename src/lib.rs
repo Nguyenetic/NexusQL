@@ -240,7 +240,7 @@ impl NexusSQL {
                 self.kernel
                     .bulk_insert(&fi.table, &columns, flat, row_count)
                     .await?;
-                return Ok(ResultSet::empty());
+                return Ok(ResultSet::affected(row_count));
             }
         }
 

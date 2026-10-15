@@ -367,6 +367,9 @@ impl Executor {
                                     |(id, row)| row.values.get(col_idx).map(|value| (id, value)),
                                 ));
                                 t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema
+                                    .fulltext_indexes
+                                    .retain(|def| def.name != *index_name);
                                 t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
                                     name: index_name.clone(),
                                     column: first_col.clone(),
@@ -380,6 +383,38 @@ impl Executor {
 
                                 tracing::info!(
                                     "Created GiST index '{}' on {}.{}",
+                                    index_name,
+                                    table,
+                                    first_col
+                                );
+                            }
+                            "fulltext" | "fts" | "fts5" => {
+                                if columns.len() != 1 {
+                                    return Err(crate::NexusError::QueryError(
+                                        "FULLTEXT indexes cover exactly one column; create one index per column".into(),
+                                    ));
+                                }
+                                let mut index = crate::fulltext::FullTextIndex::new(
+                                    index_name.clone(),
+                                    first_col.clone(),
+                                );
+                                index.build(t.rows.iter().map(|row| row.values.get(col_idx)));
+                                t.schema
+                                    .fulltext_indexes
+                                    .retain(|def| def.name != *index_name);
+                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema.fulltext_indexes.push(
+                                    crate::storage::FullTextDefinition {
+                                        name: index_name.clone(),
+                                        column: first_col.clone(),
+                                    },
+                                );
+                                t.typed_indexes.insert(
+                                    index_name.clone(),
+                                    crate::storage::IndexType::FullText(index),
+                                );
+                                tracing::info!(
+                                    "Created FULLTEXT index '{}' on {}.{}",
                                     index_name,
                                     table,
                                     first_col
@@ -478,6 +513,7 @@ impl Executor {
                     });
 
                     let mut batch = Vec::new();
+                    let mut inserted = 0usize;
                     for expr_set in values {
                         // Evaluate each expression with the provided parameters
                         // Use an empty row since we're not referencing columns in INSERT VALUES
@@ -520,16 +556,7 @@ impl Executor {
                         t.coerce_values(&mut insert_values)?;
 
                         // AUTO_INCREMENT: Generate ID if the column is NULL
-                        if let Some(ref auto_col) = t.auto_increment_column {
-                            if let Some(auto_col_idx) = t.columns.iter().position(|c| c == auto_col)
-                            {
-                                if insert_values[auto_col_idx] == Value::Null {
-                                    insert_values[auto_col_idx] =
-                                        Value::Integer(t.next_auto_increment_id);
-                                    t.next_auto_increment_id += 1;
-                                }
-                            }
-                        }
+                        t.assign_auto_increment(&mut insert_values);
 
                         // Handle ON CONFLICT / INSERT OR ... modes
                         let row = Row::new(insert_columns.clone(), insert_values.clone());
@@ -545,6 +572,7 @@ impl Executor {
                                     });
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             Some(crate::query::ast::OnConflict::Ignore) => {
                                 // INSERT OR IGNORE: Skip if conflict
@@ -556,6 +584,7 @@ impl Executor {
                                 });
                                 if !has_conflict {
                                     t.insert(row);
+                                    inserted += 1;
                                 }
                             }
                             Some(crate::query::ast::OnConflict::Abort) => {
@@ -572,6 +601,7 @@ impl Executor {
                                     ));
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             Some(crate::query::ast::OnConflict::Rollback) => {
                                 // INSERT OR ROLLBACK: Similar to ABORT but affects transaction
@@ -588,6 +618,7 @@ impl Executor {
                                     ));
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             Some(crate::query::ast::OnConflict::Fail) => {
                                 // INSERT OR FAIL: Fail but keep previous changes
@@ -603,6 +634,7 @@ impl Executor {
                                     ));
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             _ => {
                                 // No conflict handling or DoUpdate/DoNothing (PostgreSQL style)
@@ -611,8 +643,9 @@ impl Executor {
                             }
                         }
                     }
+                    inserted += batch.len();
                     t.insert_batch(batch);
-                    Ok(ResultSet::empty())
+                    Ok(ResultSet::affected(inserted))
                 } else {
                     Err(crate::NexusError::QueryError(format!(
                         "Table {} not found",
@@ -644,6 +677,26 @@ impl Executor {
                         crate::NexusError::QueryError(format!("Table {} not found", from.table))
                     })?
                 };
+
+                // Validate full-text queries and gather BM25 corpus statistics
+                // for this statement before any row is evaluated.
+                let fts_exprs: Vec<&Expr> = columns
+                    .iter()
+                    .filter_map(|item| match item {
+                        SelectItem::Expr { expr, .. } => Some(expr),
+                        SelectItem::Wildcard => None,
+                    })
+                    .chain(where_clause.iter())
+                    .chain(order_by.iter().map(|order| &order.expr))
+                    .collect();
+                let _fts_scope =
+                    match crate::fulltext::sql::prepare_select(table, &fts_exprs, params) {
+                        Ok(scope) => scope,
+                        Err(error) => {
+                            self.cleanup_ctes(&cte_cleanup);
+                            return Err(error);
+                        }
+                    };
 
                 // Resolve SELECT aliases before choosing an ORDER BY access path.
                 let order_expr = order_by.as_ref().map(|order| {
@@ -852,10 +905,11 @@ impl Executor {
                             updated.push((row_id, row));
                         }
                     }
+                    let count = updated.len();
                     for (row_id, row) in updated {
                         t.replace_row(row_id, row);
                     }
-                    Ok(ResultSet::empty())
+                    Ok(ResultSet::affected(count))
                 } else {
                     Err(crate::NexusError::QueryError(format!(
                         "Table {} not found",
@@ -865,12 +919,13 @@ impl Executor {
             }
             Statement::Delete { from, where_clause } => {
                 if let Some(t) = self.tables.get_mut(from) {
+                    let before = t.rows.len();
                     if let Some(expr) = where_clause {
                         t.retain_rows(|row| !evaluate_where(row, expr, params));
                     } else {
                         t.retain_rows(|_| false);
                     }
-                    Ok(ResultSet::empty())
+                    Ok(ResultSet::affected(before - t.rows.len()))
                 } else {
                     Err(crate::NexusError::QueryError(format!(
                         "Table {} not found",

@@ -337,7 +337,7 @@ mod fetch_traverse_tests {
         if let Value::Text(orders_json) = &result.rows[0].values[orders_col_idx] {
             // Should have exactly one { } block (one order)
             let count = orders_json.matches('{').count() - 1; // Subtract outer array
-            assert!(count >= 0 && count <= 2); // At most 1 order object
+            assert!(count <= 2); // At most 1 order object
         }
     }
 
