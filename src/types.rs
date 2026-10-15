@@ -348,6 +348,14 @@ impl ResultSet {
             rows_affected: 0,
         }
     }
+
+    /// No rows, reporting how many rows an INSERT/UPDATE/DELETE changed.
+    pub fn affected(rows_affected: usize) -> Self {
+        Self {
+            rows: vec![],
+            rows_affected,
+        }
+    }
 }
 
 #[cfg(test)]

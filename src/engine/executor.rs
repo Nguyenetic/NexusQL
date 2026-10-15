@@ -367,7 +367,9 @@ impl Executor {
                                     |(id, row)| row.values.get(col_idx).map(|value| (id, value)),
                                 ));
                                 t.schema.gist_indexes.retain(|def| def.name != *index_name);
-                                t.schema.fulltext_indexes.retain(|def| def.name != *index_name);
+                                t.schema
+                                    .fulltext_indexes
+                                    .retain(|def| def.name != *index_name);
                                 t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
                                     name: index_name.clone(),
                                     column: first_col.clone(),
@@ -397,14 +399,16 @@ impl Executor {
                                     first_col.clone(),
                                 );
                                 index.build(t.rows.iter().map(|row| row.values.get(col_idx)));
-                                t.schema.fulltext_indexes.retain(|def| def.name != *index_name);
-                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
                                 t.schema
                                     .fulltext_indexes
-                                    .push(crate::storage::FullTextDefinition {
+                                    .retain(|def| def.name != *index_name);
+                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema.fulltext_indexes.push(
+                                    crate::storage::FullTextDefinition {
                                         name: index_name.clone(),
                                         column: first_col.clone(),
-                                    });
+                                    },
+                                );
                                 t.typed_indexes.insert(
                                     index_name.clone(),
                                     crate::storage::IndexType::FullText(index),
@@ -509,6 +513,7 @@ impl Executor {
                     });
 
                     let mut batch = Vec::new();
+                    let mut inserted = 0usize;
                     for expr_set in values {
                         // Evaluate each expression with the provided parameters
                         // Use an empty row since we're not referencing columns in INSERT VALUES
@@ -576,6 +581,7 @@ impl Executor {
                                     });
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             Some(crate::query::ast::OnConflict::Ignore) => {
                                 // INSERT OR IGNORE: Skip if conflict
@@ -587,6 +593,7 @@ impl Executor {
                                 });
                                 if !has_conflict {
                                     t.insert(row);
+                                    inserted += 1;
                                 }
                             }
                             Some(crate::query::ast::OnConflict::Abort) => {
@@ -603,6 +610,7 @@ impl Executor {
                                     ));
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             Some(crate::query::ast::OnConflict::Rollback) => {
                                 // INSERT OR ROLLBACK: Similar to ABORT but affects transaction
@@ -619,6 +627,7 @@ impl Executor {
                                     ));
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             Some(crate::query::ast::OnConflict::Fail) => {
                                 // INSERT OR FAIL: Fail but keep previous changes
@@ -634,6 +643,7 @@ impl Executor {
                                     ));
                                 }
                                 t.insert(row);
+                                inserted += 1;
                             }
                             _ => {
                                 // No conflict handling or DoUpdate/DoNothing (PostgreSQL style)
@@ -642,8 +652,9 @@ impl Executor {
                             }
                         }
                     }
+                    inserted += batch.len();
                     t.insert_batch(batch);
-                    Ok(ResultSet::empty())
+                    Ok(ResultSet::affected(inserted))
                 } else {
                     Err(crate::NexusError::QueryError(format!(
                         "Table {} not found",
@@ -903,10 +914,11 @@ impl Executor {
                             updated.push((row_id, row));
                         }
                     }
+                    let count = updated.len();
                     for (row_id, row) in updated {
                         t.replace_row(row_id, row);
                     }
-                    Ok(ResultSet::empty())
+                    Ok(ResultSet::affected(count))
                 } else {
                     Err(crate::NexusError::QueryError(format!(
                         "Table {} not found",
@@ -916,12 +928,13 @@ impl Executor {
             }
             Statement::Delete { from, where_clause } => {
                 if let Some(t) = self.tables.get_mut(from) {
+                    let before = t.rows.len();
                     if let Some(expr) = where_clause {
                         t.retain_rows(|row| !evaluate_where(row, expr, params));
                     } else {
                         t.retain_rows(|_| false);
                     }
-                    Ok(ResultSet::empty())
+                    Ok(ResultSet::affected(before - t.rows.len()))
                 } else {
                     Err(crate::NexusError::QueryError(format!(
                         "Table {} not found",
