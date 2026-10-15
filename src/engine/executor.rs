@@ -878,9 +878,7 @@ impl Executor {
                             let a_val = evaluate_expr(a, &order.expr, params);
                             let b_val = evaluate_expr(b, &order.expr, params);
 
-                            let cmp = a_val
-                                .partial_cmp(&b_val)
-                                .unwrap_or(std::cmp::Ordering::Equal);
+                            let cmp = a_val.cmp(&b_val);
 
                             if order.ascending {
                                 cmp
@@ -913,13 +911,19 @@ impl Executor {
                     let order_expr = order_expr.unwrap();
                     // Expensive scalar scores/distances need evaluation once
                     // per row, not once per comparison during sorting.
+                    // Sort with Value's total `cmp`: slice sorts compare via
+                    // `PartialOrd`, which leaves mixed types (NULL vs FLOAT)
+                    // unordered and made the sort panic.
+                    let mut keyed: Vec<(Value, Row)> = std::mem::take(&mut rows)
+                        .into_iter()
+                        .map(|row| (evaluate_expr(&row, order_expr, params), row))
+                        .collect();
                     if order.ascending {
-                        rows.sort_by_cached_key(|row| evaluate_expr(row, order_expr, params));
+                        keyed.sort_by(|a, b| a.0.cmp(&b.0));
                     } else {
-                        rows.sort_by_cached_key(|row| {
-                            std::cmp::Reverse(evaluate_expr(row, order_expr, params))
-                        });
+                        keyed.sort_by(|a, b| b.0.cmp(&a.0));
                     }
+                    rows = keyed.into_iter().map(|(_, row)| row).collect();
                 }
 
                 // Apply LIMIT
@@ -1237,9 +1241,7 @@ impl Executor {
                         let a_val = evaluate_expr(a, &order.expr, params);
                         let b_val = evaluate_expr(b, &order.expr, params);
 
-                        let cmp = a_val
-                            .partial_cmp(&b_val)
-                            .unwrap_or(std::cmp::Ordering::Equal);
+                        let cmp = a_val.cmp(&b_val);
 
                         if order.ascending {
                             cmp
@@ -1708,9 +1710,7 @@ impl Executor {
                 use crate::query::evaluator::evaluate_expr;
                 let a_val = evaluate_expr(a, &order.expr, params);
                 let b_val = evaluate_expr(b, &order.expr, params);
-                let cmp = a_val
-                    .partial_cmp(&b_val)
-                    .unwrap_or(std::cmp::Ordering::Equal);
+                let cmp = a_val.cmp(&b_val);
                 if order.ascending {
                     cmp
                 } else {
@@ -2708,9 +2708,7 @@ impl Executor {
             matching_rows.sort_by(|a, b| {
                 let a_val = evaluate_expr(a, &order.expr, params);
                 let b_val = evaluate_expr(b, &order.expr, params);
-                let cmp = a_val
-                    .partial_cmp(&b_val)
-                    .unwrap_or(std::cmp::Ordering::Equal);
+                let cmp = a_val.cmp(&b_val);
                 if order.ascending {
                     cmp
                 } else {

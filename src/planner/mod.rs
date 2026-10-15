@@ -79,7 +79,7 @@ impl TableStatistics {
 
         // Calculate n_distinct
         let mut distinct_values: Vec<Value> = values.clone();
-        distinct_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        distinct_values.sort_by(Value::cmp);
         distinct_values.dedup();
         let n_distinct = distinct_values.len() as i64;
 

@@ -562,7 +562,7 @@ impl WindowManager {
             let val_b = b.values.get(col_idx);
 
             let cmp = match (val_a, val_b) {
-                (Some(a), Some(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+                (Some(a), Some(b)) => a.cmp(b),
                 (Some(_), None) => Ordering::Greater,
                 (None, Some(_)) => Ordering::Less,
                 (None, None) => Ordering::Equal,

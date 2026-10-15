@@ -460,8 +460,6 @@ pub fn rank_candidates(
     let stats = statement_stats(bare(column_ref), &text);
     let phrases = parsed.positive_phrases();
     let scored = index.scored_rows(&parsed);
-    // NULL keys compare Equal to everything (Value's Ord is not total), so
-    // the executor's order is only defined when WHERE drops them: decline.
     let mut counts: Vec<Option<usize>> = Vec::with_capacity(rows.len());
     let mut keys: Vec<Value> = Vec::with_capacity(rows.len());
     for &row in rows {
@@ -480,13 +478,13 @@ pub fn rank_candidates(
                 counts.push(Some(i));
             }
             // Not a match: evaluating the function gives 0 for text, NULL otherwise.
-            Err(_) => match table.rows.get(row).and_then(|r| r.get(column)) {
-                Some(Value::Text(_)) => {
-                    keys.push(signed_score(&name, 0.0));
-                    counts.push(None);
-                }
-                _ => return None,
-            },
+            Err(_) => {
+                keys.push(match table.rows.get(row).and_then(|r| r.get(column)) {
+                    Some(Value::Text(_)) => signed_score(&name, 0.0),
+                    _ => Value::Null,
+                });
+                counts.push(None);
+            }
         }
     }
     let mut order: Vec<usize> = (0..rows.len()).collect();

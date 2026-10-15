@@ -233,9 +233,50 @@ impl PartialOrd for Value {
     }
 }
 
+impl Value {
+    /// Sort position of the type when values of different types meet:
+    /// NULL first (SQLite's ORDER BY), then booleans, numbers, text, blobs.
+    fn type_rank(&self) -> u8 {
+        match self {
+            Value::Null => 0,
+            Value::Boolean(_) => 1,
+            Value::Integer(_) | Value::Float(_) => 2,
+            Value::Text(_) => 3,
+            Value::Blob(_) => 4,
+            Value::Vector(_) => 5,
+            Value::Geometry(_) => 6,
+        }
+    }
+}
+
+/// A total order for sorting rows (`ORDER BY`, window and FETCH order). Same-type
+/// values compare as `partial_cmp`;
+/// INTEGER and FLOAT compare numerically (INTEGER first on a tie, so only
+/// equal values are `Equal`); other mixes order by type, NULL lowest.
+/// `partial_cmp` stays partial (mixed types are unordered) because existing
+/// comparisons rely on it, and slice sorts compare through `PartialOrd`: sort
+/// values with `sort_by(Value::cmp)`, not `sort()` / `sort_by_cached_key`.
 impl Ord for Value {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+        use std::cmp::Ordering;
+        match (self, other) {
+            (Value::Integer(i), Value::Float(f)) => ordered_float::OrderedFloat(*i as f64)
+                .cmp(f)
+                .then(Ordering::Less),
+            (Value::Float(f), Value::Integer(i)) => f
+                .cmp(&ordered_float::OrderedFloat(*i as f64))
+                .then(Ordering::Greater),
+            (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
+            (Value::Vector(a), Value::Vector(b)) => a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| x.total_cmp(y))
+                .find(|o| o.is_ne())
+                .unwrap_or_else(|| a.len().cmp(&b.len())),
+            _ => self
+                .partial_cmp(other)
+                .unwrap_or_else(|| self.type_rank().cmp(&other.type_rank())),
+        }
     }
 }
 
@@ -554,5 +595,34 @@ mod tests {
         assert_eq!(name, "Alice");
         assert!(active);
         assert!((score - 95.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn ord_is_total_across_types() {
+        use ordered_float::OrderedFloat;
+        // Mixed NULL / FLOAT keys used to compare Equal to everything, which
+        // made ORDER BY panic ("does not correctly implement a total order").
+        let mut keys: Vec<Value> = (0..200)
+            .map(|i| match i % 5 {
+                0 => Value::Null,
+                1 => Value::Float(OrderedFloat(-(i as f64) / 7.0)),
+                2 => Value::Integer(i % 13),
+                3 => Value::Text(format!("t{}", i % 9)),
+                _ => Value::Float(OrderedFloat((i % 4) as f64)),
+            })
+            .collect();
+        keys.sort_by(Value::cmp);
+        if let Some(w) = keys.windows(2).find(|w| w[0].cmp(&w[1]).is_gt()) {
+            panic!("{:?} > {:?}", w[0], w[1]);
+        }
+        assert!(keys[..40].iter().all(|v| *v == Value::Null), "NULL first");
+        assert!(matches!(keys.last(), Some(Value::Text(_))));
+        let (one, one_f) = (Value::Integer(1), Value::Float(OrderedFloat(1.0)));
+        assert_eq!(one.cmp(&one_f), std::cmp::Ordering::Less);
+        assert_eq!(one_f.cmp(&one), std::cmp::Ordering::Greater);
+        assert_eq!(
+            Value::Integer(2).cmp(&Value::Float(OrderedFloat(1.5))),
+            std::cmp::Ordering::Greater
+        );
     }
 }
