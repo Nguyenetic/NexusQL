@@ -319,7 +319,8 @@ impl VectorIndex for HNSWIndex {
                     links.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
                     links.truncate(m);
                     if let Some(neighbor) = self.nodes.get_mut(&neighbor_id) {
-                        neighbor.neighbors[lc as usize] = links.into_iter().map(|(_, id)| id).collect();
+                        neighbor.neighbors[lc as usize] =
+                            links.into_iter().map(|(_, id)| id).collect();
                     }
                 }
             }

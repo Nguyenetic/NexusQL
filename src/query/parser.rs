@@ -1211,9 +1211,7 @@ impl QueryParser {
             None => Ok(None),
             Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) => {
                 n.parse::<usize>().map(Some).map_err(|_| {
-                    NexusError::ParseError(format!(
-                        "LIMIT must be a non-negative integer, got {n}"
-                    ))
+                    NexusError::ParseError(format!("LIMIT must be a non-negative integer, got {n}"))
                 })
             }
             Some(other) => Err(NexusError::ParseError(format!(
@@ -2316,13 +2314,16 @@ mod tests {
                 Expr::Parameter(crate::query::ast::Parameter::Positional(2)),
             ]
         );
-        let stmt =
-            QueryParser::parse("SELECT id FROM t\nWHERE a = ? AND b = 'it''s ?' AND c = ?").unwrap();
+        let stmt = QueryParser::parse("SELECT id FROM t\nWHERE a = ? AND b = 'it''s ?' AND c = ?")
+            .unwrap();
         let Statement::Select { where_clause, .. } = stmt else {
             panic!("select");
         };
         let text = format!("{:?}", where_clause.unwrap());
-        assert!(text.contains("Positional(1)") && text.contains("Positional(2)"), "{text}");
+        assert!(
+            text.contains("Positional(1)") && text.contains("Positional(2)"),
+            "{text}"
+        );
         assert!(!text.contains("Positional(3)"), "{text}");
     }
 
@@ -2336,7 +2337,10 @@ mod tests {
             "SELECT a FROM t UNION SELECT a FROM u LIMIT 1 OFFSET 1",
         ] {
             let error = QueryParser::parse(sql).unwrap_err().to_string();
-            assert!(error.contains("OFFSET") || error.contains("LIMIT"), "{sql}: {error}");
+            assert!(
+                error.contains("OFFSET") || error.contains("LIMIT"),
+                "{sql}: {error}"
+            );
         }
     }
 
