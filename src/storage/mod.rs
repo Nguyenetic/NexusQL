@@ -365,6 +365,22 @@ impl Table {
         }
     }
 
+    /// Drop rows from offset `len` onwards, maintaining indexes. Undoes an
+    /// append-only statement without snapshotting the table.
+    pub fn truncate_rows(&mut self, len: usize) {
+        if self.rows.len() <= len {
+            return;
+        }
+        let mut seen = 0;
+        self.retain_rows(|_| {
+            seen += 1;
+            seen <= len
+        });
+        for index in self.indexes.values_mut() {
+            index.build_from_rows(&self.rows);
+        }
+    }
+
     /// Rebuild every index whose definition is persisted in the schema.
     pub fn rebuild_indexes(&mut self) {
         self.rebuild_gist_indexes();
