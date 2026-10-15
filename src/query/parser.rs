@@ -846,6 +846,44 @@ impl QueryParser {
         }
     }
 
+    /// Rewrite each `?` placeholder token to `$1`, `$2`, ... in source order.
+    /// Uses the SQL tokenizer, so `?` inside strings and comments is untouched.
+    /// Returns None when the statement has no `?` placeholder.
+    fn number_question_placeholders(dialect: &NexusQLDialect, sql: &str) -> Option<String> {
+        if !sql.contains('?') {
+            return None;
+        }
+        let tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql)
+            .tokenize_with_location()
+            .ok()?;
+        let marks: Vec<(u64, u64)> = tokens
+            .iter()
+            .filter(|t| matches!(&t.token, Token::Placeholder(p) if p == "?"))
+            .map(|t| (t.location.line, t.location.column))
+            .collect();
+        if marks.is_empty() {
+            return None;
+        }
+        // The tokenizer reports 1-based line and character columns.
+        let mut out = String::with_capacity(sql.len() + marks.len() * 2);
+        let (mut line, mut column, mut next) = (1u64, 1u64, 0usize);
+        for ch in sql.chars() {
+            if ch == '?' && marks.get(next) == Some(&(line, column)) {
+                next += 1;
+                out.push_str(&format!("${next}"));
+            } else {
+                out.push(ch);
+            }
+            if ch == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        Some(out)
+    }
+
     pub fn parse(sql: &str) -> Result<Statement> {
         let parser = Self::new();
 
@@ -862,6 +900,10 @@ impl QueryParser {
         if sql.trim().to_uppercase().starts_with("TRAVERSE") {
             return parser.parse_traverse(sql);
         }
+
+        // `?` placeholders bind in order of appearance, like SQLite/DB-API.
+        let numbered = Self::number_question_placeholders(&parser.dialect, sql);
+        let sql = numbered.as_deref().unwrap_or(sql);
 
         // Preprocess SQL to extract FETCH clauses
         let (preprocessed_sql, fetch_clauses) = Self::preprocess_sql(sql);
@@ -2254,6 +2296,30 @@ impl QueryParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn question_mark_placeholders_bind_in_order() {
+        let stmt = QueryParser::parse("INSERT INTO t VALUES (?, '?', ?) -- ?\n").unwrap();
+        let Statement::Insert { values, .. } = stmt else {
+            panic!("insert");
+        };
+        assert_eq!(
+            values[0],
+            vec![
+                Expr::Parameter(crate::query::ast::Parameter::Positional(1)),
+                Expr::Literal(Value::Text("?".into())),
+                Expr::Parameter(crate::query::ast::Parameter::Positional(2)),
+            ]
+        );
+        let stmt =
+            QueryParser::parse("SELECT id FROM t\nWHERE a = ? AND b = 'it''s ?' AND c = ?").unwrap();
+        let Statement::Select { where_clause, .. } = stmt else {
+            panic!("select");
+        };
+        let text = format!("{:?}", where_clause.unwrap());
+        assert!(text.contains("Positional(1)") && text.contains("Positional(2)"), "{text}");
+        assert!(!text.contains("Positional(3)"), "{text}");
+    }
 
     #[test]
     fn test_parse_select() {
