@@ -439,6 +439,19 @@ impl Table {
         }
     }
 
+    /// Put deleted rows back at their original offsets (ascending), then
+    /// rebuild the indexes. Only used to undo a failed statement.
+    pub fn restore_deleted(&mut self, rows: Vec<(usize, Row)>) {
+        for (offset, row) in rows {
+            let at = offset.min(self.rows.len());
+            self.rows.insert(at, row);
+        }
+        for index in self.indexes.values_mut() {
+            index.build_from_rows(&self.rows);
+        }
+        self.rebuild_indexes();
+    }
+
     /// Rebuild every index whose definition is persisted in the schema.
     pub fn rebuild_indexes(&mut self) {
         self.rebuild_gist_indexes();
@@ -650,6 +663,32 @@ mod schema_tests {
         let round = TableSchema::decode(&bincode::serialize(&current).unwrap()).unwrap();
         assert_eq!(round.vector_indexes[0].column, "e");
         assert_eq!(round.fulltext_indexes[0].column, "body");
+    }
+
+    #[test]
+    fn restore_deleted_puts_rows_and_index_entries_back() {
+        let mut table = Table::new("t".into(), vec!["body".into()]);
+        table.schema.fulltext_indexes.push(FullTextDefinition {
+            name: "f".into(),
+            column: "body".into(),
+        });
+        table.rebuild_indexes();
+        for text in ["alpha one", "beta two", "alpha three"] {
+            table.insert(Row::new(vec!["body".into()], vec![Value::Text(text.into())]));
+        }
+        let removed: Vec<(usize, Row)> = vec![(0, table.rows[0].clone()), (2, table.rows[2].clone())];
+        table.retain_rows(|row| row.get("body") == Some(&Value::Text("beta two".into())));
+        table.restore_deleted(removed);
+        let bodies: Vec<_> = table.rows.iter().map(|r| r.get("body").cloned()).collect();
+        assert_eq!(
+            bodies,
+            ["alpha one", "beta two", "alpha three"].map(|t| Some(Value::Text(t.into())))
+        );
+        let Some(IndexType::FullText(index)) = table.typed_indexes.get("f") else {
+            panic!("index rebuilt");
+        };
+        let query = crate::fulltext::Query::parse("alpha").unwrap();
+        assert_eq!(index.search(&query), vec![0, 2]);
     }
 
     #[test]

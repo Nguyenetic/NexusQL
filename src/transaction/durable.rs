@@ -22,6 +22,15 @@ enum Undo {
         rows: usize,
         next_auto_increment_id: i64,
     },
+    /// DELETE / UPDATE: the pre-images of the rows the WHERE clause selects,
+    /// with their offsets. Cloning the whole table (and its indexes) before
+    /// every DELETE or UPDATE made each one cost as much as the table, even
+    /// when it matched nothing.
+    Rows {
+        rows: Vec<(usize, Row)>,
+        deleted: bool,
+        len: usize,
+    },
 }
 
 impl Undo {
@@ -30,6 +39,36 @@ impl Undo {
             rows: table.rows.len(),
             next_auto_increment_id: table.next_auto_increment_id,
         }
+    }
+
+    /// The rows a DELETE or UPDATE will touch, selected exactly as the
+    /// executor selects them (`evaluate_where`, all rows without WHERE).
+    fn rows(
+        table: &Table,
+        filter: Option<&crate::query::ast::Expr>,
+        params: &QueryParams,
+        deleted: bool,
+    ) -> Self {
+        let rows = table
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                filter.map_or(true, |expr| {
+                    crate::query::evaluator::evaluate_where(row, expr, params)
+                })
+            })
+            .map(|(offset, row)| (offset, row.clone()))
+            .collect();
+        Undo::Rows {
+            rows,
+            deleted,
+            len: table.rows.len(),
+        }
+    }
+
+    fn is_noop(&self) -> bool {
+        matches!(self, Undo::Rows { rows, .. } if rows.is_empty())
     }
 }
 
@@ -152,9 +191,18 @@ impl DurableExecutor {
                 },
                 Some(table),
             ) => Undo::append(table),
+            (Statement::Delete { where_clause, .. }, Some(table)) => {
+                Undo::rows(table, where_clause.as_ref(), params, true)
+            }
+            (Statement::Update { where_clause, .. }, Some(table)) => {
+                Undo::rows(table, where_clause.as_ref(), params, false)
+            }
             (_, table) => Undo::Snapshot(table.cloned().map(Box::new)),
         };
         match self.executor.execute(statement, params) {
+            // A DELETE or UPDATE that matched nothing changed nothing: no
+            // change events and no table rewrite at the next commit.
+            Ok(result) if before.is_noop() => Ok(result),
             Ok(result) => {
                 if let Some(name) = touched {
                     self.finish_write(
@@ -269,6 +317,23 @@ impl DurableExecutor {
                 if let Some(table) = self.executor.get_tables_mut().get_mut(name) {
                     table.truncate_rows(rows);
                     table.next_auto_increment_id = next_auto_increment_id;
+                }
+            }
+            Undo::Rows { rows, deleted, len } => {
+                if let Some(table) = self.executor.get_tables_mut().get_mut(name) {
+                    if deleted {
+                        // Only restore what is gone: a failure before the
+                        // executor removed anything leaves every row in place.
+                        if table.rows.len() + rows.len() == len {
+                            table.restore_deleted(rows);
+                        }
+                    } else {
+                        for (offset, row) in rows {
+                            if offset < table.rows.len() {
+                                table.replace_row(offset, row);
+                            }
+                        }
+                    }
                 }
             }
         }
