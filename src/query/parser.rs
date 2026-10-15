@@ -1201,6 +1201,27 @@ impl QueryParser {
         }
     }
 
+    /// LIMIT must be a non-negative integer literal. OFFSET, parameters and
+    /// expressions used to be ignored silently, returning the wrong rows.
+    fn convert_limit(query: &sql_ast::Query) -> Result<Option<usize>> {
+        if query.offset.is_some() {
+            return Err(NexusError::ParseError("OFFSET is not supported".into()));
+        }
+        match &query.limit {
+            None => Ok(None),
+            Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) => {
+                n.parse::<usize>().map(Some).map_err(|_| {
+                    NexusError::ParseError(format!(
+                        "LIMIT must be a non-negative integer, got {n}"
+                    ))
+                })
+            }
+            Some(other) => Err(NexusError::ParseError(format!(
+                "LIMIT must be an integer literal, got {other}"
+            ))),
+        }
+    }
+
     fn convert_query(&self, query: &Box<sql_ast::Query>) -> Result<Statement> {
         // Extract CTEs (WITH clause)
         let with = self.convert_with_clause(&query.with)?;
@@ -1233,13 +1254,7 @@ impl QueryParser {
                 };
 
                 // Extract LIMIT
-                let limit = if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) =
-                    &query.limit
-                {
-                    n.parse::<usize>().ok()
-                } else {
-                    None
-                };
+                let limit = Self::convert_limit(query)?;
 
                 // Extract WHERE clause
                 let where_clause = select
@@ -1347,13 +1362,7 @@ impl QueryParser {
                     None
                 };
 
-                let limit = if let Some(sql_ast::Expr::Value(sql_ast::Value::Number(n, _))) =
-                    &query.limit
-                {
-                    n.parse::<usize>().ok()
-                } else {
-                    None
-                };
+                let limit = Self::convert_limit(query)?;
 
                 Ok(Statement::SetOperation {
                     left: Box::new(left_stmt),
@@ -1751,13 +1760,7 @@ impl QueryParser {
                     .transpose()?;
 
                 // Convert LIMIT
-                let limit = query.limit.as_ref().and_then(|l| {
-                    if let sql_ast::Expr::Value(sql_ast::Value::Number(n, _)) = l {
-                        n.parse::<usize>().ok()
-                    } else {
-                        None
-                    }
-                });
+                let limit = Self::convert_limit(query)?;
 
                 Ok(SubqueryExpr {
                     columns,
@@ -2321,6 +2324,20 @@ mod tests {
         let text = format!("{:?}", where_clause.unwrap());
         assert!(text.contains("Positional(1)") && text.contains("Positional(2)"), "{text}");
         assert!(!text.contains("Positional(3)"), "{text}");
+    }
+
+    #[test]
+    fn unsupported_limit_forms_are_errors_not_ignored() {
+        assert!(QueryParser::parse("SELECT * FROM t LIMIT 5").is_ok());
+        for sql in [
+            "SELECT * FROM t LIMIT 5 OFFSET 10",
+            "SELECT * FROM t LIMIT $1",
+            "SELECT * FROM t LIMIT ?",
+            "SELECT a FROM t UNION SELECT a FROM u LIMIT 1 OFFSET 1",
+        ] {
+            let error = QueryParser::parse(sql).unwrap_err().to_string();
+            assert!(error.contains("OFFSET") || error.contains("LIMIT"), "{sql}: {error}");
+        }
     }
 
     #[test]
