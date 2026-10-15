@@ -345,14 +345,36 @@ pub fn bm25(
     if !query.matches(tokens) {
         return None;
     }
-    let length = tokens.len() as f64;
+    let phrases = query.positive_phrases();
+    Some(bm25_counts(
+        tokens.len(),
+        &phrases,
+        |i| occurrences(tokens, phrases[i]).len() as u32,
+        stats,
+        k1,
+        b,
+    ))
+}
+
+/// BM25 of a matching document from its token count and the occurrence count
+/// `tf(i)` of each `phrases[i]`. Shared by the tokenizing path and the
+/// index-postings path, so both produce bit-identical scores.
+pub fn bm25_counts(
+    length: usize,
+    phrases: &[&Phrase],
+    tf: impl Fn(usize) -> u32,
+    stats: Option<&CorpusStats>,
+    k1: f64,
+    b: f64,
+) -> f64 {
+    let length = length as f64;
     let (documents, average_length) = match stats {
         Some(s) if s.documents > 0.0 && s.average_length > 0.0 => (s.documents, s.average_length),
         _ => (1.0, length.max(1.0)),
     };
     let mut score = 0.0;
-    for phrase in query.positive_phrases() {
-        let tf = occurrences(tokens, phrase).len() as f64;
+    for (i, phrase) in phrases.iter().enumerate() {
+        let tf = tf(i) as f64;
         if tf == 0.0 {
             continue;
         }
@@ -363,7 +385,7 @@ pub fn bm25(
         let idf = (1.0 + (documents - df + 0.5) / (df + 0.5)).ln();
         score += idf * tf * (k1 + 1.0) / (tf + k1 * (1.0 - b + b * length / average_length));
     }
-    Some(score)
+    score
 }
 
 /// Merged byte ranges of every positive phrase occurrence.

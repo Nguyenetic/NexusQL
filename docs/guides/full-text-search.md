@@ -150,21 +150,39 @@ combine `title MATCH q OR body MATCH q`.
 `cargo bench --bench fulltext_search` (release, Windows x86-64, in-memory
 executor, 20,000 messages of 6-24 words, 8 projects). Each query is
 `SELECT id, bm25(..), snippet(..) WHERE <match> AND project = 'p3' ORDER BY bm25 LIMIT 10`;
-the SQLite column is the same query against an FTS5 table with bundled SQLite.
+the `top5` rows drop the project filter and use `LIMIT 5`, the shape of a memory
+search for a common word. The SQLite column is the same query against an FTS5
+table with bundled SQLite. "Before" is the release that re-tokenized every
+candidate row (2026-10-15, same corpus).
 
-| Query | Matching rows (of 20,000) | FULLTEXT index | Table scan | SQLite FTS5 |
-|-|-|-|-|-|
-| rare term `zebracorn` | 19 | 24 µs | 52 ms | 20 µs |
-| common term `kaka` | 87 | 130 µs | 49 ms | 69 µs |
-| prefix `kalo*` | 487 | 0.56 ms | 45 ms | 0.30 ms |
-| boolean `checkpoint AND NOT recovery OR 検索` | 1,000 | 0.42 ms | 48 ms | 0.10 ms |
-| phrase `"wal recovery"` | 2,715 | 4.5 ms | 51 ms | 1.8 ms |
+| Query | Matching rows (of 20,000) | FULLTEXT index | Before | Table scan | SQLite FTS5 |
+|-|-|-|-|-|-|
+| rare term `zebracorn` | 19 | 22 µs | 23 µs | 53 ms | 19 µs |
+| common term `kaka` | 87 | 96 µs | 141 µs | 51 ms | 72 µs |
+| prefix `kalo*` | 487 | 0.34 ms | 0.67 ms | 51 ms | 0.37 ms |
+| boolean `checkpoint AND NOT recovery OR 検索` | 1,000 | 0.56 ms | 0.50 ms | 50 ms | 0.11 ms |
+| phrase `"wal recovery"` | 2,715 | 1.6 ms | 4.9 ms | 54 ms | 1.7 ms |
+| frequent `access` | 6,334 | 2.0 ms | 9.3 ms | 55 ms | 3.5 ms |
+| top5 `access` | 6,334 | 1.6 ms | 39.6 ms | | 2.2 ms |
+| top5 `access OR kaka` | 6,400 | 1.8 ms | 36.6 ms | | 2.3 ms |
 
 | Operation | Time |
 |-|-|
-| `CREATE INDEX` over 20,000 rows | 119 ms |
-| one parameterized INSERT into the indexed table | 3.3 µs |
+| `CREATE INDEX` over 20,000 rows | 114 ms |
+| one parameterized INSERT into the indexed table | 3.0 µs |
 | 4,000 parameterized INSERTs in one transaction, disk, FULL sync | 42 ms |
+
+How a ranked search avoids touching rows: candidates come from the posting
+lists; for `ORDER BY bm25(col, q) [LIMIT k]` (or `fts_score ... DESC`) every
+candidate's score is computed from postings (term frequencies, positions for
+phrases, document lengths), the candidates are sorted, and the rest of `WHERE`
+is evaluated in rank order until `k` rows pass. Only those rows are cloned, and
+only the returned rows are tokenized, for `snippet()` / `highlight()`. Other
+shapes (no `LIMIT`, `ORDER BY` another column, `COUNT(*)`) still evaluate
+every candidate, but `MATCH` and `bm25()` look the row's text up in the
+statement's postings instead of tokenizing it. The shortcut is skipped (the
+general path runs) for joins, aliases, `GROUP BY`, aggregates, window
+functions, subqueries in `WHERE`, and when a candidate's ranked column is NULL.
 
 Writes: each COMMIT (and each autocommit statement) writes every row of the
 tables it changed to the WAL, a property of the current storage engine. Import
@@ -191,10 +209,19 @@ Pass the query once per function (or bind the same `?` value several times).
   a second on-disk structure to keep consistent with the WAL; rebuilding from
   recovered rows reuses the existing guarantees and makes index corruption
   impossible, at the cost of open-time work (about 6 µs per message).
-- **Exact candidates, re-checked.** The index returns exactly the rows the
-  per-row predicate accepts, and the executor still evaluates the full `WHERE`
-  clause, so indexed and unindexed tables return identical rows and scores
-  (verified by `tests/fulltext_search_test.rs`).
+- **Exact candidates, re-checked from postings.** The index returns exactly the
+  rows the per-row predicate accepts, and the executor still evaluates the full
+  `WHERE` clause. The re-check and `bm25()` no longer re-tokenize the row: the
+  statement keeps, per query, each matching text with its token count and
+  phrase occurrence counts read from postings, and a text found there is a
+  match with those counts (both depend only on the text, so this holds for any
+  row or column carrying it). A text not found is tokenized as before. Both
+  paths feed one BM25 function, so indexed and unindexed tables return
+  identical rows, order and bit-identical scores, verified by
+  `postings_ranking_matches_tokenized_rows` in `tests/fulltext_search_test.rs`
+  (common words, phrases, prefixes, AND/OR/NOT, Japanese, filters, ties, DML).
+  Prefix postings keep duplicate positions: a CJK bigram and the trailing
+  unigram share a position and count as two occurrences, as when tokenizing.
 - **FTS5 sign for `bm25`.** Lower-is-better keeps `ORDER BY bm25(...)` working
   unchanged for code ported from FTS5; `fts_score` serves `DESC` ordering.
 - **Bigrams for CJK.** Dictionary segmentation would need large data files; bigrams

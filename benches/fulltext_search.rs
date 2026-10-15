@@ -4,6 +4,8 @@
 //! against SQLite FTS5 (bundled rusqlite) for the same ranked, filtered query:
 //!   SELECT id, bm25(..), snippet(..) WHERE <match> AND project = 'p3'
 //!   ORDER BY bm25 LIMIT 10
+//! plus unfiltered top-5 searches for terms in thousands of messages
+//! (`top5_*`), the shape a memory search runs for a common word.
 //! NexusQL runs through the in-memory Executor, so WAL I/O is excluded, as is
 //! SQL parsing. Run: cargo bench --bench fulltext_search
 
@@ -54,6 +56,10 @@ fn corpus() -> Vec<(i64, String, String)> {
                 if id % 997 == 0 {
                     parts.push("zebracorn");
                 }
+                // A frequent term: ~6,300 matching messages.
+                if id % 3 == 1 {
+                    parts.push("access");
+                }
                 parts.join(" ")
             };
             (id as i64, project, text)
@@ -98,12 +104,25 @@ const QUERIES: &[(&str, &str)] = &[
     ("prefix", "kalo*"),
     ("boolean", "checkpoint AND NOT recovery OR 検索"),
     ("common", "kaka"),
+    ("frequent", "access"),
 ];
+
+/// Unfiltered ranked top-5 with snippets over terms matching thousands of rows.
+const TOP5: &[(&str, &str)] = &[("frequent", "access"), ("frequent_or", "access OR kaka")];
 
 fn search_sql(query: &str) -> Statement {
     QueryParser::parse(&format!(
         "SELECT id, bm25(content, '{q}') AS score, snippet(content, '{q}', '[', ']', '...', 10) AS s \
          FROM docs WHERE content MATCH '{q}' AND project = 'p3' ORDER BY score LIMIT 10",
+        q = query.replace('\'', "''")
+    ))
+    .unwrap()
+}
+
+fn top5_sql(query: &str) -> Statement {
+    QueryParser::parse(&format!(
+        "SELECT id, bm25(content, '{q}') AS score, snippet(content, '{q}', '[', ']', '...', 10) AS s \
+         FROM docs WHERE content MATCH '{q}' ORDER BY score LIMIT 5",
         q = query.replace('\'', "''")
     ))
     .unwrap()
@@ -171,6 +190,35 @@ fn fulltext(c: &mut Criterion) {
             b.iter(|| {
                 let rows: Vec<i64> = stmt
                     .query_map([fts5_query], |row| row.get(0))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect();
+                black_box(rows)
+            })
+        });
+    }
+
+    for (name, query) in TOP5 {
+        let statement = top5_sql(query);
+        let ids = |rows: &[Row]| -> Vec<Value> {
+            rows.iter().map(|r| r.get("id").cloned().unwrap()).collect()
+        };
+        assert_eq!(
+            ids(&indexed.execute(&statement, &p).unwrap().rows),
+            ids(&scan.execute(&statement, &p).unwrap().rows)
+        );
+        group.bench_function(format!("top5_{name}_indexed"), |b| {
+            b.iter(|| black_box(indexed.execute(&statement, &p).unwrap()))
+        });
+        let mut stmt = sqlite
+            .prepare(
+                "SELECT rowid, bm25(docs) AS score, snippet(docs, 0, '[', ']', '...', 10)                  FROM docs WHERE docs MATCH ?1 ORDER BY score LIMIT 5",
+            )
+            .unwrap();
+        group.bench_function(format!("top5_{name}_sqlite_fts5"), |b| {
+            b.iter(|| {
+                let rows: Vec<i64> = stmt
+                    .query_map([*query], |row| row.get(0))
                     .unwrap()
                     .map(Result::unwrap)
                     .collect();

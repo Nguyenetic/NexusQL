@@ -23,6 +23,15 @@ struct Posting {
     positions: Vec<u32>,
 }
 
+/// BM25 inputs of one matching document, read from postings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocCounts {
+    /// Token count of the document.
+    pub length: u32,
+    /// Occurrences of each positive phrase of the query, in order.
+    pub tf: Vec<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FullTextIndex {
     pub name: String,
@@ -255,8 +264,10 @@ impl FullTextIndex {
             merged
                 .into_iter()
                 .map(|(doc, mut positions)| {
+                    // Keep duplicates: a CJK bigram and the trailing unigram
+                    // share a position and are two occurrences, as when the
+                    // row is tokenized (`query::occurrences`).
                     positions.sort_unstable();
-                    positions.dedup();
                     Posting { doc, positions }
                 })
                 .collect(),
@@ -365,6 +376,37 @@ impl FullTextIndex {
             .collect();
         rows.sort_unstable();
         rows
+    }
+
+    /// Every matching row with its BM25 inputs, ascending by row. The counts
+    /// equal those `query::bm25` takes from the tokenized row: token count and
+    /// occurrences of each `query.positive_phrases()` entry, in that order.
+    pub fn scored_rows(&self, query: &Query) -> Vec<(usize, DocCounts)> {
+        let phrase_tf: Vec<Vec<(u32, u32)>> = query
+            .positive_phrases()
+            .into_iter()
+            .map(|p| self.phrase_documents(p))
+            .collect();
+        let mut out: Vec<(usize, DocCounts)> = self
+            .evaluate(query)
+            .into_iter()
+            .map(|doc| {
+                let tf = phrase_tf
+                    .iter()
+                    .map(|list| match list.binary_search_by_key(&doc, |&(d, _)| d) {
+                        Ok(i) => list[i].1,
+                        Err(_) => 0,
+                    })
+                    .collect();
+                let counts = DocCounts {
+                    length: self.doc_len[doc as usize],
+                    tf,
+                };
+                (self.doc_row[doc as usize] as usize, counts)
+            })
+            .collect();
+        out.sort_unstable_by_key(|&(row, _)| row);
+        out
     }
 
     /// Corpus statistics for ranking `query` against this column.
@@ -480,6 +522,8 @@ mod tests {
             "京",
             "(fast OR slow) AND database",
             "zzz",
+            "あ",
+            "\"fast d*\"",
         ] {
             let q = Query::parse(query).unwrap();
             assert_eq!(
@@ -487,6 +531,22 @@ mod tests {
                 rows_matching(values, query),
                 "query {query}"
             );
+            // Postings give the same BM25 inputs as tokenizing the row.
+            let phrases = q.positive_phrases();
+            let scored = index.scored_rows(&q);
+            assert_eq!(
+                scored.iter().map(|(row, _)| *row).collect::<Vec<_>>(),
+                index.search(&q)
+            );
+            for (row, counts) in scored {
+                let tokens = tokenize(indexed_text(Some(&values[row])).unwrap(), Mode::Document);
+                let tf: Vec<u32> = phrases
+                    .iter()
+                    .map(|p| super::super::query::occurrences(&tokens, p).len() as u32)
+                    .collect();
+                assert_eq!(counts.length as usize, tokens.len(), "query {query}");
+                assert_eq!(counts.tf, tf, "query {query} row {row}");
+            }
         }
     }
 
@@ -499,11 +559,13 @@ mod tests {
             text("東京の高速データベース"),
             Value::Integer(7),
             text("rusty nails and rust"),
+            // Bigram ああ and trailing unigram あ share a position.
+            text("ああ fast databases"),
         ];
         let mut index = FullTextIndex::new("idx".into(), "body".into());
         index.build(values.iter().map(Some));
         assert_consistent(&index, &values);
-        assert_eq!(index.document_count(), 4);
+        assert_eq!(index.document_count(), 5);
 
         index.push_row(Some(&text("fast database fast database")));
         values.push(text("fast database fast database"));

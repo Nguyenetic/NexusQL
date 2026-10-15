@@ -760,6 +760,8 @@ impl Executor {
                     _ => None,
                 };
                 let used_knn = nearest.is_some();
+                // Rows already filtered, ordered and limited by full-text ranking.
+                let mut presorted = false;
                 let mut rows = if let Some(rows) = nearest {
                     rows
                 } else if from.table.is_empty() {
@@ -775,15 +777,60 @@ impl Executor {
                             params,
                         )
                     }) {
-                        ids.into_iter()
-                            .filter_map(|id| table.rows.get(id).cloned())
-                            .collect()
+                        // ORDER BY bm25()/fts_score() LIMIT k over a FULLTEXT
+                        // index: rank candidates from postings, then filter in
+                        // rank order and stop at k rows (top-k pushdown).
+                        let ranked = match (order_by, order_expr, limit, where_clause) {
+                            (Some(order), Some(expr), Some(k), Some(filter))
+                                if from.alias.is_none()
+                                    && group_by.is_empty()
+                                    && !has_aggregate_functions(columns)
+                                    && !has_window_functions(columns)
+                                    && !Self::contains_subqueries(filter) =>
+                            {
+                                crate::fulltext::sql::rank_candidates(
+                                    table,
+                                    expr,
+                                    order.ascending,
+                                    &ids,
+                                    params,
+                                )
+                                .map(|ranked| {
+                                    let mut out = Vec::with_capacity((*k).min(ranked.rows.len()));
+                                    for (i, &id) in ranked.rows.iter().enumerate() {
+                                        if out.len() >= *k {
+                                            break;
+                                        }
+                                        let Some(row) = table.rows.get(id) else {
+                                            continue;
+                                        };
+                                        ranked.admit(table, i);
+                                        if evaluate_where(row, filter, params) {
+                                            out.push(row.clone());
+                                        }
+                                    }
+                                    out
+                                })
+                            }
+                            _ => None,
+                        };
+                        presorted = ranked.is_some();
+                        ranked.unwrap_or_else(|| {
+                            ids.into_iter()
+                                .filter_map(|id| table.rows.get(id).cloned())
+                                .collect()
+                        })
                     } else {
                         table.select_all()
                     }
                 } else {
                     table.select_all()
                 };
+                if !presorted {
+                    // Rows are about to be evaluated in bulk: serve MATCH and
+                    // bm25() from postings rather than re-tokenizing them.
+                    crate::fulltext::sql::load_matches(table);
+                }
 
                 if from.alias.is_some() || !from.joins.is_empty() {
                     let qualifier = from.alias.as_deref().unwrap_or(&from.table);
@@ -799,7 +846,7 @@ impl Executor {
                 }
 
                 // Apply WHERE clause filter with subquery support
-                if let Some(expr) = where_clause.as_ref().filter(|_| !used_knn) {
+                if let Some(expr) = where_clause.as_ref().filter(|_| !used_knn && !presorted) {
                     if Self::contains_subqueries(expr) {
                         // Use subquery-aware evaluation
                         let mut filtered_rows = Vec::new();
@@ -862,7 +909,7 @@ impl Executor {
                 }
 
                 // Apply ORDER BY sorting (especially for vector distance)
-                if let Some(order) = order_by.as_ref().filter(|_| !used_knn) {
+                if let Some(order) = order_by.as_ref().filter(|_| !used_knn && !presorted) {
                     let order_expr = order_expr.unwrap();
                     // Expensive scalar scores/distances need evaluation once
                     // per row, not once per comparison during sorting.
