@@ -267,7 +267,7 @@ impl Table {
         let row_idx = self.rows.len();
 
         // Update indexes
-        for (_col_name, index) in &mut self.indexes {
+        for index in self.indexes.values_mut() {
             index.insert(&row, row_idx);
         }
         for index in self.typed_indexes.values_mut() {

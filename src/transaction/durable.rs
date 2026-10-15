@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// How to undo one statement if it, or its autocommit, fails.
 enum Undo {
     /// The table as it was (None: it did not exist).
-    Snapshot(Option<Table>),
+    Snapshot(Option<Box<Table>>),
     /// The statement only appended rows: truncate back instead of cloning
     /// the whole table (and its indexes) before every INSERT.
     Append {
@@ -152,7 +152,7 @@ impl DurableExecutor {
                 },
                 Some(table),
             ) => Undo::append(table),
-            (_, table) => Undo::Snapshot(table.cloned()),
+            (_, table) => Undo::Snapshot(table.cloned().map(Box::new)),
         };
         match self.executor.execute(statement, params) {
             Ok(result) => {
@@ -257,7 +257,7 @@ impl DurableExecutor {
     fn restore(&mut self, name: &str, before: Undo) {
         match before {
             Undo::Snapshot(Some(table)) => {
-                self.executor.get_tables_mut().insert(name.into(), table);
+                self.executor.get_tables_mut().insert(name.into(), *table);
             }
             Undo::Snapshot(None) => {
                 self.executor.get_tables_mut().remove(name);
