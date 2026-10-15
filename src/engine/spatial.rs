@@ -169,8 +169,19 @@ pub(super) fn candidates(
 ) -> Option<Vec<usize>> {
     if let Expr::BinaryOp { left, op, right } = expr {
         return match op {
-            BinaryOperator::And => candidates(table, qualifier, left, outer, params)
-                .or_else(|| candidates(table, qualifier, right, outer, params)),
+            // Both sides are supersets of their own matches, so their
+            // intersection is a superset of the conjunction's matches.
+            BinaryOperator::And => match (
+                candidates(table, qualifier, left, outer, params),
+                candidates(table, qualifier, right, outer, params),
+            ) {
+                (Some(mut l), Some(mut r)) => {
+                    r.sort_unstable();
+                    l.retain(|id| r.binary_search(id).is_ok());
+                    Some(l)
+                }
+                (l, r) => l.or(r),
+            },
             BinaryOperator::Or => {
                 let mut ids = candidates(table, qualifier, left, outer, params)?;
                 ids.extend(candidates(table, qualifier, right, outer, params)?);
@@ -178,12 +189,18 @@ pub(super) fn candidates(
                 ids.dedup();
                 Some(ids)
             }
+            BinaryOperator::TextMatch => {
+                crate::fulltext::sql::candidates(table, qualifier, expr, params)
+            }
             _ => None,
         };
     }
     let Expr::Function { name, args } = expr else {
         return None;
     };
+    if name.eq_ignore_ascii_case("FTS_MATCH") {
+        return crate::fulltext::sql::candidates(table, qualifier, expr, params);
+    }
     let name = name.to_ascii_uppercase();
     if !matches!(
         name.as_str(),

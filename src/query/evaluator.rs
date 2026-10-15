@@ -265,6 +265,7 @@ fn evaluate_binary_op(left: &Value, op: &BinaryOperator, right: &Value) -> Value
                 Value::Boolean(false)
             }
         }
+        BinaryOperator::TextMatch => crate::fulltext::sql::text_match(left, right),
         BinaryOperator::Matches => {
             // NexusSQL custom MATCHES operator
             if let (Value::Text(text), Value::Text(pattern)) = (left, right) {
@@ -364,6 +365,9 @@ fn to_bool(val: &Value) -> bool {
 
 /// Evaluate function calls (built-in functions)
 fn evaluate_function(row: &Row, name: &str, args: &[Expr], params: &QueryParams) -> Value {
+    if let Some(value) = crate::fulltext::sql::evaluate_function(row, name, args, params) {
+        return value;
+    }
     let name_upper = name.to_uppercase();
     if name_upper.starts_with("ST_") {
         if let Some(predicate) = crate::geometry::prepared::Predicate::from_name(&name_upper) {

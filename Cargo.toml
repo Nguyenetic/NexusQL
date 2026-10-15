@@ -26,6 +26,7 @@ ndarray = "0.16"
 sqlparser = "0.52"
 rand = "0.8"
 regex = "1"
+unicode-normalization = "0.1"
 ort = { version = "2.0.0-rc.10", optional = true }
 tokenizers = { version = "0.20", optional = true }
 num_cpus = "1.16"

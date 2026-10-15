@@ -367,6 +367,8 @@ pub enum BinaryOperator {
     Or,      // OR
     Like,    // LIKE
     Matches, // MATCHES (custom)
+    /// Full-text `col MATCH query` (also `@@`); see `crate::fulltext`.
+    TextMatch,
 
     // Vector distance operators (pgvector-compatible)
     L2Distance,     // <-> (Euclidean distance)

@@ -92,6 +92,10 @@ impl Dialect for NexusQLDialect {
         &self,
         parser: &SqlParser,
     ) -> Option<std::result::Result<u8, ParserError>> {
+        // Full-text `column MATCH 'query'` (SQLite FTS5 style) binds like LIKE.
+        if is_match_keyword(&parser.peek_token().token) {
+            return Some(Ok(self.prec_value(Precedence::Like)));
+        }
         // The tokenizer emits <-> as Lt, Arrow. Recognize just this pair so
         // comparisons against negative numbers (e.g. x<-1) keep their meaning.
         if parser.peek_token().token == Token::Lt && parser.peek_nth_token(1).token == Token::Arrow
@@ -109,6 +113,18 @@ impl Dialect for NexusQLDialect {
         expr: &sql_ast::Expr,
         precedence: u8,
     ) -> Option<std::result::Result<sql_ast::Expr, ParserError>> {
+        if is_match_keyword(&parser.peek_token().token) {
+            parser.next_token();
+            return Some(
+                parser
+                    .parse_subexpr(precedence)
+                    .map(|right| sql_ast::Expr::BinaryOp {
+                        left: Box::new(expr.clone()),
+                        op: sql_ast::BinaryOperator::Custom("MATCH".into()),
+                        right: Box::new(right),
+                    }),
+            );
+        }
         if let Err(error) = self.get_next_precedence(parser)? {
             return Some(Err(error));
         }
@@ -124,6 +140,12 @@ impl Dialect for NexusQLDialect {
                 }),
         )
     }
+}
+
+/// An unquoted `MATCH` word in operator position.
+fn is_match_keyword(token: &Token) -> bool {
+    matches!(token, Token::Word(word)
+        if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("match"))
 }
 
 pub struct QueryParser {
@@ -1607,7 +1629,10 @@ impl QueryParser {
             sql_ast::BinaryOperator::Or => Ok(BinaryOperator::Or),
             // Vector distance operators (pgvector-compatible)
             sql_ast::BinaryOperator::Spaceship => Ok(BinaryOperator::CosineDistance), // <=> operator
+            // Full-text search: `col MATCH 'q'` and PostgreSQL-style `col @@ 'q'`
+            sql_ast::BinaryOperator::AtAt => Ok(BinaryOperator::TextMatch),
             sql_ast::BinaryOperator::Custom(op_str) => match op_str.as_str() {
+                "MATCH" => Ok(BinaryOperator::TextMatch),
                 "<->" => Ok(BinaryOperator::L2Distance),
                 "<=>" => Ok(BinaryOperator::CosineDistance),
                 "<#>" => Ok(BinaryOperator::InnerProduct),
@@ -2141,34 +2166,7 @@ impl QueryParser {
                 let left_expr = self.convert_where_expr(left)?;
                 let right_expr = self.convert_where_expr(right)?;
 
-                let binary_op = match op {
-                    sql_ast::BinaryOperator::Eq => BinaryOperator::Eq,
-                    sql_ast::BinaryOperator::NotEq => BinaryOperator::NotEq,
-                    sql_ast::BinaryOperator::Lt => BinaryOperator::Lt,
-                    sql_ast::BinaryOperator::LtEq => BinaryOperator::LtEq,
-                    sql_ast::BinaryOperator::Gt => BinaryOperator::Gt,
-                    sql_ast::BinaryOperator::GtEq => BinaryOperator::GtEq,
-                    sql_ast::BinaryOperator::And => BinaryOperator::And,
-                    sql_ast::BinaryOperator::Or => BinaryOperator::Or,
-                    // Vector distance operators (pgvector-compatible)
-                    sql_ast::BinaryOperator::Custom(op_str) => match op_str.as_str() {
-                        "<->" => BinaryOperator::L2Distance,
-                        "<=>" => BinaryOperator::CosineDistance,
-                        "<#>" => BinaryOperator::InnerProduct,
-                        _ => {
-                            return Err(NexusError::ParseError(format!(
-                                "Unsupported custom operator: {}",
-                                op_str
-                            )))
-                        }
-                    },
-                    _ => {
-                        return Err(NexusError::ParseError(format!(
-                            "Unsupported operator: {:?}",
-                            op
-                        )))
-                    }
-                };
+                let binary_op = self.convert_binary_op(op)?;
 
                 Ok(Expr::BinaryOp {
                     left: Box::new(left_expr),

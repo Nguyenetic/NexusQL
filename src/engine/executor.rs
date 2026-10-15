@@ -367,6 +367,7 @@ impl Executor {
                                     |(id, row)| row.values.get(col_idx).map(|value| (id, value)),
                                 ));
                                 t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema.fulltext_indexes.retain(|def| def.name != *index_name);
                                 t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
                                     name: index_name.clone(),
                                     column: first_col.clone(),
@@ -380,6 +381,36 @@ impl Executor {
 
                                 tracing::info!(
                                     "Created GiST index '{}' on {}.{}",
+                                    index_name,
+                                    table,
+                                    first_col
+                                );
+                            }
+                            "fulltext" | "fts" | "fts5" => {
+                                if columns.len() != 1 {
+                                    return Err(crate::NexusError::QueryError(
+                                        "FULLTEXT indexes cover exactly one column; create one index per column".into(),
+                                    ));
+                                }
+                                let mut index = crate::fulltext::FullTextIndex::new(
+                                    index_name.clone(),
+                                    first_col.clone(),
+                                );
+                                index.build(t.rows.iter().map(|row| row.values.get(col_idx)));
+                                t.schema.fulltext_indexes.retain(|def| def.name != *index_name);
+                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema
+                                    .fulltext_indexes
+                                    .push(crate::storage::FullTextDefinition {
+                                        name: index_name.clone(),
+                                        column: first_col.clone(),
+                                    });
+                                t.typed_indexes.insert(
+                                    index_name.clone(),
+                                    crate::storage::IndexType::FullText(index),
+                                );
+                                tracing::info!(
+                                    "Created FULLTEXT index '{}' on {}.{}",
                                     index_name,
                                     table,
                                     first_col
@@ -644,6 +675,26 @@ impl Executor {
                         crate::NexusError::QueryError(format!("Table {} not found", from.table))
                     })?
                 };
+
+                // Validate full-text queries and gather BM25 corpus statistics
+                // for this statement before any row is evaluated.
+                let fts_exprs: Vec<&Expr> = columns
+                    .iter()
+                    .filter_map(|item| match item {
+                        SelectItem::Expr { expr, .. } => Some(expr),
+                        SelectItem::Wildcard => None,
+                    })
+                    .chain(where_clause.iter())
+                    .chain(order_by.iter().map(|order| &order.expr))
+                    .collect();
+                let _fts_scope =
+                    match crate::fulltext::sql::prepare_select(table, &fts_exprs, params) {
+                        Ok(scope) => scope,
+                        Err(error) => {
+                            self.cleanup_ctes(&cte_cleanup);
+                            return Err(error);
+                        }
+                    };
 
                 // Resolve SELECT aliases before choosing an ORDER BY access path.
                 let order_expr = order_by.as_ref().map(|order| {

@@ -2,7 +2,7 @@
 //! PROPRIETARY
 
 use crate::storage::wal::{SyncPolicy, WriteAheadLog};
-use crate::storage::{Table, TableMeta, TableMetaSer};
+use crate::storage::{Table, TableMeta, TableMetaSer, TableSchema};
 use crate::types::{Row, Value};
 use crate::Result;
 use sled::Db;
@@ -400,7 +400,7 @@ impl DiskStorage {
         let mut table = Table {
             name: meta.name,
             schema: Self::get(db, &state, format!("table:{}:schema", name).as_bytes())?
-                .map(|bytes| bincode::deserialize(&bytes))
+                .map(|bytes| TableSchema::decode(&bytes))
                 .transpose()
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
                 .unwrap_or_default(),
@@ -411,7 +411,7 @@ impl DiskStorage {
             auto_increment_column: meta.auto_increment_column,
             next_auto_increment_id: meta.next_auto_increment_id.max(1),
         };
-        table.rebuild_gist_indexes();
+        table.rebuild_indexes();
         Ok(Some(table))
     }
 
