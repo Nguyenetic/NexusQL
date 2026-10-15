@@ -348,10 +348,10 @@ mod tests {
 
     #[test]
     fn negative_float() {
-        let sql = "INSERT INTO t VALUES (-3.14);";
+        let sql = "INSERT INTO t VALUES (-2.5);";
         let r = try_parse_insert(sql).unwrap();
         match &r.rows[0][0] {
-            Value::Float(f) => assert!((f.into_inner() + 3.14).abs() < 1e-9),
+            Value::Float(f) => assert!((f.into_inner() + 2.5).abs() < 1e-9),
             _ => panic!(),
         }
     }
