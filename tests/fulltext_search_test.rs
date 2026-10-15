@@ -452,6 +452,168 @@ async fn index_survives_reopen() {
     db.shutdown().await.unwrap();
 }
 
+/// A few hundred messages where `access` is common, with repeated texts (score
+/// ties), phrases, prefixes, Japanese (including a bigram and unigram sharing
+/// a position), NULLs and filter columns.
+fn parity_corpus() -> Vec<(i64, String, Option<String>, Option<String>)> {
+    const WORDS: &[&str] = &[
+        "access",
+        "access",
+        "access",
+        "database",
+        "kmes",
+        "orca",
+        "planner",
+        "report",
+        "form",
+        "query",
+        "accessible",
+        "accessor",
+        "mill",
+        "sheet",
+        "gitea",
+        "wal",
+    ];
+    const JA: &[&str] = &[
+        "東京のアクセスデータベース",
+        "ああ アクセス",
+        "データベースの検索インデックス",
+    ];
+    let mut seed: u64 = 0x5EED;
+    let mut next = |n: usize| {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as usize % n
+    };
+    (0..400)
+        .map(|id| {
+            let content = match id % 41 {
+                0 => None,
+                1 => Some("access database access database".to_string()),
+                2 => Some(JA[next(JA.len())].to_string()),
+                _ => Some(
+                    (0..3 + next(20))
+                        .map(|_| WORDS[next(WORDS.len())])
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+            };
+            // Titles sit on rows with content, except 123: a title hit whose
+            // content is NULL (bm25 NULL) makes the postings ranking decline.
+            let title = (id % 3 == 0 && (content.is_some() || id == 123))
+                .then(|| format!("note {} {}", WORDS[id % WORDS.len()], id));
+            (id as i64, format!("p{}", id % 4), title, content)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn postings_ranking_matches_tokenized_rows() {
+    let db = NexusSQL::new(":memory:").await.unwrap();
+    for table in ["fast", "slow"] {
+        db.execute(&format!(
+            "CREATE TABLE {table} (id INT, project TEXT, title TEXT, content TEXT)"
+        ))
+        .await
+        .unwrap();
+        for (id, project, title, content) in parity_corpus() {
+            let text = |v: Option<String>| v.map_or(Value::Null, Value::Text);
+            db.execute_with_params(
+                &format!("INSERT INTO {table} VALUES ($1, $2, $3, $4)"),
+                Some(vec![
+                    Value::Integer(id),
+                    Value::Text(project),
+                    text(title),
+                    text(content),
+                ]),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    db.execute("CREATE INDEX fast_content ON fast USING fulltext (content)")
+        .await
+        .unwrap();
+    db.execute("CREATE INDEX fast_title ON fast USING fulltext (title)")
+        .await
+        .unwrap();
+    const SHAPES: &[&str] = &[
+        "SELECT id, bm25(content, $1) AS score, snippet(content, $1, '[', ']', '...', 6) AS s \
+         FROM {t} WHERE content MATCH $1 AND project = 'p1' ORDER BY score LIMIT 5",
+        "SELECT id, bm25(content, $1) AS score FROM {t} WHERE content MATCH $1 ORDER BY score LIMIT 50",
+        "SELECT id, bm25(content, $1) AS score FROM {t} WHERE content MATCH $1 ORDER BY score",
+        "SELECT id, fts_score(content, $1) AS score FROM {t} WHERE content MATCH $1 \
+         ORDER BY score DESC LIMIT 7",
+        "SELECT id, bm25(content, $1, 2.0, 0.5) AS score FROM {t} WHERE fts_match(content, $1) \
+         ORDER BY score LIMIT 10",
+        "SELECT id, highlight(content, $1) AS h, bm25(content, $1) AS score FROM {t} \
+         WHERE content MATCH $1 AND id > 20 ORDER BY id",
+        "SELECT COUNT(*) AS n FROM {t} WHERE content MATCH $1",
+        // ORDER BY over NULL and FLOAT keys has no defined order (Value's Ord
+        // treats mixed types as Equal), so these shapes filter NULL content.
+        "SELECT id, bm25(content, $1) AS score FROM {t} \
+         WHERE (content MATCH $1 OR project = 'p2') AND content IS NOT NULL ORDER BY score LIMIT 10",
+        "SELECT id, bm25(content, $1) AS score FROM {t} WHERE (content MATCH $1 OR title MATCH $1) \
+         AND project <> 'p0' AND content IS NOT NULL ORDER BY score LIMIT 8",
+        "SELECT id, fts_score(title, $1) AS score FROM {t} WHERE title MATCH $1 \
+         ORDER BY score DESC LIMIT 3",
+    ];
+    const PARITY_QUERIES: &[&str] = &[
+        "access",
+        "acc*",
+        "\"access database\"",
+        "\"access d*\"",
+        "access OR kmes",
+        "access NOT orca",
+        "NOT access",
+        "(access OR orca) AND kmes",
+        "kmes access",
+        "あ",
+        "アクセス",
+        "東京",
+        "データベース",
+        "zzz",
+        "note",
+    ];
+    async fn compare(db: &NexusSQL, label: &str) {
+        for shape in SHAPES {
+            for query in PARITY_QUERIES {
+                let mut results = Vec::new();
+                for table in ["fast", "slow"] {
+                    let r = db
+                        .execute_with_params(
+                            &shape.replace("{t}", table),
+                            Some(vec![Value::Text((*query).into())]),
+                        )
+                        .await
+                        .unwrap();
+                    results.push(r.rows.into_iter().map(|row| row.values).collect::<Vec<_>>());
+                }
+                assert_eq!(results[0], results[1], "{label}: {shape} / {query}");
+            }
+        }
+    }
+    compare(&db, "fresh").await;
+    // Exercise doc-id remapping and replaced documents, then compare again.
+    for table in ["fast", "slow"] {
+        db.execute(&format!("DELETE FROM {table} WHERE id >= 100 AND id < 160"))
+            .await
+            .unwrap();
+        db.execute(&format!(
+            "UPDATE {table} SET content = 'access access orca' WHERE id >= 200 AND id < 230"
+        ))
+        .await
+        .unwrap();
+        db.execute(&format!(
+            "UPDATE {table} SET content = NULL WHERE id >= 300 AND id < 330 AND title IS NULL"
+        ))
+        .await
+        .unwrap();
+    }
+    compare(&db, "after DML").await;
+}
+
 // Child process for the kill test. The parent kills it while a transaction
 // containing searchable rows is still open.
 #[test]
