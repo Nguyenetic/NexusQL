@@ -491,3 +491,58 @@ impl Table {
 }
 pub mod lsm;
 pub use lsm::LSMStorage;
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[derive(Serialize)]
+    struct TableSchemaV1Ser {
+        column_types: HashMap<String, DataType>,
+        gist_indexes: Vec<GiSTDefinition>,
+    }
+
+    #[test]
+    fn schema_written_before_fulltext_indexes_still_decodes() {
+        let old = TableSchemaV1Ser {
+            column_types: [("geom".to_string(), DataType::Geometry)].into(),
+            gist_indexes: vec![GiSTDefinition {
+                name: "g".into(),
+                column: "geom".into(),
+                index_type: crate::index::GiSTIndexType::RTree,
+            }],
+        };
+        let decoded = TableSchema::decode(&bincode::serialize(&old).unwrap()).unwrap();
+        assert_eq!(decoded.gist_indexes.len(), 1);
+        assert_eq!(decoded.column_types["geom"], DataType::Geometry);
+        assert!(decoded.fulltext_indexes.is_empty());
+
+        let current = TableSchema {
+            fulltext_indexes: vec![FullTextDefinition {
+                name: "f".into(),
+                column: "body".into(),
+            }],
+            ..decoded
+        };
+        let round = TableSchema::decode(&bincode::serialize(&current).unwrap()).unwrap();
+        assert_eq!(round.fulltext_indexes[0].column, "body");
+        assert_eq!(round.gist_indexes[0].name, "g");
+        assert!(TableSchema::decode(b"\x01").is_err());
+    }
+
+    #[test]
+    fn table_rebuilds_fulltext_index_from_schema() {
+        let mut table = Table::new("t".into(), vec!["body".into()]);
+        table.schema.fulltext_indexes.push(FullTextDefinition {
+            name: "f".into(),
+            column: "body".into(),
+        });
+        table.insert(Row::new(vec!["body".into()], vec![Value::Text("hello world".into())]));
+        table.rebuild_indexes();
+        let Some(IndexType::FullText(index)) = table.typed_indexes.get("f") else {
+            panic!("index rebuilt");
+        };
+        let query = crate::fulltext::Query::parse("hello").unwrap();
+        assert_eq!(index.search(&query), vec![0]);
+    }
+}
