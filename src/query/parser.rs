@@ -1551,11 +1551,13 @@ impl QueryParser {
                     right: right_expr,
                 };
 
-                // Handle NOT LIKE by wrapping in a boolean negation
+                // NOT LIKE negates the match, the same way unary NOT is lowered.
                 if *negated {
-                    // For NOT LIKE, we'll use a workaround: compare result to false
-                    // In practice, the evaluator should handle this
-                    Ok(like_expr) // TODO: Add proper NOT support
+                    Ok(Expr::BinaryOp {
+                        left: Box::new(like_expr),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expr::Literal(Value::Boolean(false))),
+                    })
                 } else {
                     Ok(like_expr)
                 }
