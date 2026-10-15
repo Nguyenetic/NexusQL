@@ -1661,10 +1661,74 @@ impl QueryParser {
                 }
             }
 
+            // x IN (a, b) lowers to x = a OR x = b; NOT IN negates it the
+            // same way unary NOT is lowered.
+            sql_ast::Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                let left = self.convert_expr_to_ast(expr)?;
+                let mut any: Option<Expr> = None;
+                for item in list {
+                    let eq = Expr::BinaryOp {
+                        left: Box::new(left.clone()),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(self.convert_expr_to_ast(item)?),
+                    };
+                    any = Some(match any {
+                        Some(previous) => Expr::BinaryOp {
+                            left: Box::new(previous),
+                            op: BinaryOperator::Or,
+                            right: Box::new(eq),
+                        },
+                        None => eq,
+                    });
+                }
+                let any = any.unwrap_or(Expr::Literal(Value::Boolean(false)));
+                Ok(Self::negate_if(any, *negated))
+            }
+
+            // x BETWEEN a AND b lowers to x >= a AND x <= b.
+            sql_ast::Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                let value = self.convert_expr_to_ast(expr)?;
+                let range = Expr::BinaryOp {
+                    left: Box::new(Expr::BinaryOp {
+                        left: Box::new(value.clone()),
+                        op: BinaryOperator::GtEq,
+                        right: Box::new(self.convert_expr_to_ast(low)?),
+                    }),
+                    op: BinaryOperator::And,
+                    right: Box::new(Expr::BinaryOp {
+                        left: Box::new(value),
+                        op: BinaryOperator::LtEq,
+                        right: Box::new(self.convert_expr_to_ast(high)?),
+                    }),
+                };
+                Ok(Self::negate_if(range, *negated))
+            }
+
             _ => Err(NexusError::ParseError(format!(
                 "Unsupported expression in SELECT: {:?}",
                 expr
             ))),
+        }
+    }
+
+    fn negate_if(expr: Expr, negated: bool) -> Expr {
+        if negated {
+            Expr::BinaryOp {
+                left: Box::new(expr),
+                op: BinaryOperator::Eq,
+                right: Box::new(Expr::Literal(Value::Boolean(false))),
+            }
+        } else {
+            expr
         }
     }
 
