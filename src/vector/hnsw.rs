@@ -210,11 +210,11 @@ impl HNSWIndex {
             }
         }
 
-        // into_sorted_vec() returns largest to smallest due to reversed ordering
-        // We need smallest to largest, so reverse it
-        let mut sorted = w.into_sorted_vec();
-        sorted.reverse();
-        sorted.into_iter().map(|e| (e.row_id, e.distance)).collect()
+        // `w` orders by distance, so into_sorted_vec() is nearest first.
+        w.into_sorted_vec()
+            .into_iter()
+            .map(|e| (e.row_id, e.distance))
+            .collect()
     }
 }
 
@@ -295,11 +295,31 @@ impl VectorIndex for HNSWIndex {
                 if let Some(neighbor) = self.nodes.get_mut(&neighbor_id) {
                     if (lc as usize) < neighbor.neighbors.len() {
                         neighbor.neighbors[lc as usize].push(row_id);
-
-                        // Prune connections if exceeds max
-                        if neighbor.neighbors[lc as usize].len() > m {
-                            neighbor.neighbors[lc as usize].truncate(m);
-                        }
+                    }
+                }
+                // Over capacity: keep the neighbor's m closest links. Dropping
+                // the newest link unconditionally (the old truncate) left new
+                // nodes unreachable.
+                let over = self
+                    .nodes
+                    .get(&neighbor_id)
+                    .and_then(|n| n.neighbors.get(lc as usize))
+                    .is_some_and(|links| links.len() > m);
+                if over {
+                    let base = self.nodes[&neighbor_id].vector.clone();
+                    let mut links: Vec<(f32, u64)> = self.nodes[&neighbor_id].neighbors
+                        [lc as usize]
+                        .iter()
+                        .filter_map(|id| {
+                            self.nodes
+                                .get(id)
+                                .map(|n| (l2_distance(&base, &n.vector), *id))
+                        })
+                        .collect();
+                    links.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+                    links.truncate(m);
+                    if let Some(neighbor) = self.nodes.get_mut(&neighbor_id) {
+                        neighbor.neighbors[lc as usize] = links.into_iter().map(|(_, id)| id).collect();
                     }
                 }
             }
@@ -406,8 +426,9 @@ impl Eq for MinHeapEntry {}
 
 impl PartialOrd for MinHeapEntry {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // Reverse for min-heap
-        other.distance.partial_cmp(&self.distance)
+        // Result set W: BinaryHeap must expose the *furthest* result so the
+        // search can stop and evict it. (Reversing this evicted the nearest.)
+        self.distance.partial_cmp(&other.distance)
     }
 }
 
