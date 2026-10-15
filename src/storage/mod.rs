@@ -5,7 +5,8 @@ pub mod disk;
 pub mod wal;
 
 use crate::fulltext::FullTextIndex;
-use crate::index::{BRINIndex, BTreeIndex, GINIndex, GiSTIndex, HNSWIndex};
+use crate::index::{BRINIndex, BTreeIndex, GINIndex, GiSTIndex};
+use crate::vector::sql::{VectorColumnIndex, VectorIndexDefinition};
 use crate::query::ast::DataType;
 use crate::types::{Row, Value};
 use crate::Result;
@@ -17,8 +18,9 @@ use std::collections::HashMap;
 /// from `CREATE INDEX <idx_name> ON <table> (<col>) USING <type>`.
 #[derive(Debug, Clone)]
 pub enum IndexType {
-    /// Hierarchical Navigable Small World — for high-dimensional vector search.
-    HNSW(HNSWIndex),
+    /// Hierarchical Navigable Small World — for high-dimensional vector search
+    /// (`USING hnsw`). The graph is built on first use; see `vector::sql`.
+    HNSW(VectorColumnIndex),
     /// Generalized Inverted Index — for arrays / JSON / full-text tokens.
     GIN(GINIndex),
     /// Generalized Search Tree — for geometric / spatial / range types.
@@ -57,6 +59,9 @@ pub struct TableSchema {
     /// Appended field: `decode` still reads schemas written before it existed.
     #[serde(default)]
     pub fulltext_indexes: Vec<FullTextDefinition>,
+    /// Appended field: HNSW definitions; graphs are rebuilt on first use.
+    #[serde(default)]
+    pub vector_indexes: Vec<VectorIndexDefinition>,
 }
 
 /// Schema layout before full-text indexes, for reading older databases.
@@ -66,20 +71,44 @@ struct TableSchemaV1 {
     gist_indexes: Vec<GiSTDefinition>,
 }
 
+/// Schema layout before HNSW definitions were persisted.
+#[derive(Deserialize)]
+struct TableSchemaV2 {
+    column_types: HashMap<String, DataType>,
+    gist_indexes: Vec<GiSTDefinition>,
+    fulltext_indexes: Vec<FullTextDefinition>,
+}
+
 impl TableSchema {
     /// Decode a bincode `table:<name>:schema` value of any known layout.
     /// bincode is not self-describing, so a missing trailing field fails
-    /// the current layout and is retried as the previous one.
+    /// the current layout and is retried as the previous ones.
     pub fn decode(bytes: &[u8]) -> bincode::Result<Self> {
         bincode::deserialize::<TableSchema>(bytes).or_else(|error| {
-            bincode::deserialize::<TableSchemaV1>(bytes)
+            bincode::deserialize::<TableSchemaV2>(bytes)
                 .map(|old| TableSchema {
                     column_types: old.column_types,
                     gist_indexes: old.gist_indexes,
-                    fulltext_indexes: Vec::new(),
+                    fulltext_indexes: old.fulltext_indexes,
+                    vector_indexes: Vec::new(),
+                })
+                .or_else(|_| {
+                    bincode::deserialize::<TableSchemaV1>(bytes).map(|old| TableSchema {
+                        column_types: old.column_types,
+                        gist_indexes: old.gist_indexes,
+                        fulltext_indexes: Vec::new(),
+                        vector_indexes: Vec::new(),
+                    })
                 })
                 .map_err(|_| error)
         })
+    }
+
+    /// Forget every persisted definition named `name` (it is being replaced).
+    pub fn forget_index(&mut self, name: &str) {
+        self.gist_indexes.retain(|def| def.name != name);
+        self.fulltext_indexes.retain(|def| def.name != name);
+        self.vector_indexes.retain(|def| def.name != name);
     }
 }
 
@@ -278,6 +307,10 @@ impl Table {
                     }
                 }
                 IndexType::FullText(index) => index.push_row(row.get(&index.column)),
+                IndexType::HNSW(index) => {
+                    let column = index.def.column.clone();
+                    index.push_row(row_idx, row.get(&column));
+                }
                 _ => {}
             }
         }
@@ -312,6 +345,12 @@ impl Table {
                         index.push_row(row.get(&index.column));
                     }
                 }
+                IndexType::HNSW(index) => {
+                    let column = index.def.column.clone();
+                    for (offset, row) in rows.iter().enumerate() {
+                        index.push_row(start + offset, row.get(&column));
+                    }
+                }
                 _ => {}
             }
         }
@@ -333,6 +372,10 @@ impl Table {
                 }
                 IndexType::FullText(index) => {
                     index.replace_row(row_id, old.get(&index.column), row.get(&index.column))
+                }
+                IndexType::HNSW(index) => {
+                    let column = index.def.column.clone();
+                    index.replace_row(row_id, old.get(&column), row.get(&column))
                 }
                 _ => {}
             }
@@ -373,6 +416,7 @@ impl Table {
                 match index {
                     IndexType::GiST(index) => index.remap_row_ids(&offsets),
                     IndexType::FullText(index) => index.remap_row_ids(&offsets),
+                    IndexType::HNSW(index) => index.remap(&offsets),
                     _ => {}
                 }
             }
@@ -399,6 +443,18 @@ impl Table {
     pub fn rebuild_indexes(&mut self) {
         self.rebuild_gist_indexes();
         self.rebuild_fulltext_indexes();
+        self.rebuild_vector_indexes();
+    }
+
+    /// Recreate HNSW indexes from their definitions. Graphs stay unbuilt until
+    /// a nearest-neighbor query needs one.
+    pub fn rebuild_vector_indexes(&mut self) {
+        for def in &self.schema.vector_indexes {
+            self.typed_indexes.insert(
+                def.name.clone(),
+                IndexType::HNSW(VectorColumnIndex::new(def.clone())),
+            );
+        }
     }
 
     pub fn rebuild_fulltext_indexes(&mut self) {
@@ -558,6 +614,42 @@ mod schema_tests {
         assert_eq!(round.fulltext_indexes[0].column, "body");
         assert_eq!(round.gist_indexes[0].name, "g");
         assert!(TableSchema::decode(b"\x01").is_err());
+    }
+
+    #[derive(Serialize)]
+    struct TableSchemaV2Ser {
+        column_types: HashMap<String, DataType>,
+        gist_indexes: Vec<GiSTDefinition>,
+        fulltext_indexes: Vec<FullTextDefinition>,
+    }
+
+    #[test]
+    fn schema_written_before_vector_indexes_still_decodes() {
+        let old = TableSchemaV2Ser {
+            column_types: HashMap::new(),
+            gist_indexes: Vec::new(),
+            fulltext_indexes: vec![FullTextDefinition {
+                name: "f".into(),
+                column: "body".into(),
+            }],
+        };
+        let decoded = TableSchema::decode(&bincode::serialize(&old).unwrap()).unwrap();
+        assert_eq!(decoded.fulltext_indexes[0].name, "f");
+        assert!(decoded.vector_indexes.is_empty());
+        let current = TableSchema {
+            vector_indexes: vec![VectorIndexDefinition {
+                name: "h".into(),
+                column: "e".into(),
+                metric: crate::vector::sql::VectorMetric::Cosine,
+                m: 16,
+                ef_construction: 64,
+                ef_search: 40,
+            }],
+            ..decoded
+        };
+        let round = TableSchema::decode(&bincode::serialize(&current).unwrap()).unwrap();
+        assert_eq!(round.vector_indexes[0].column, "e");
+        assert_eq!(round.fulltext_indexes[0].column, "body");
     }
 
     #[test]

@@ -187,6 +187,77 @@ class NexusDB:
         sql += f" ORDER BY score LIMIT {limit}"
         return self.execute(sql, values).rows
 
+    def create_vector_index(
+        self,
+        table: str,
+        column: str,
+        name: Optional[str] = None,
+        *,
+        metric: str = "cosine",
+        m: int = 16,
+        ef_construction: int = 64,
+        ef_search: int = 40,
+    ) -> None:
+        """Create (or replace) an HNSW index on one VECTOR column.
+
+        Equivalent to ``CREATE INDEX <name> ON <table> USING hnsw (<column>)
+        WITH (metric = '<metric>', m = .., ef_construction = .., ef_search = ..)``.
+        The graph is built by the first nearest-neighbor query, then kept up
+        to date by INSERT, UPDATE and DELETE.
+        """
+        _check_identifier(table)
+        _check_identifier(column)
+        name = name or f"{table}_{column}_hnsw"
+        _check_identifier(name)
+        if metric not in ("cosine", "l2"):
+            raise ValueError("metric must be 'cosine' or 'l2'")
+        options = {"m": m, "ef_construction": ef_construction, "ef_search": ef_search}
+        for key, value in options.items():
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 10000:
+                raise ValueError(f"{key} must be an integer from 1 to 10000")
+        settings = ", ".join(f"{k} = {v}" for k, v in options.items())
+        self.execute(
+            f"CREATE INDEX {name} ON {table} USING hnsw ({column}) "
+            f"WITH (metric = '{metric}', {settings})"
+        )
+
+    def vector_search(
+        self,
+        table: str,
+        vector: Sequence[float],
+        *,
+        column: str = "embedding",
+        select: Sequence[str] = ("*",),
+        where: Optional[str] = None,
+        params: Optional[Sequence[Any]] = None,
+        limit: int = 10,
+        metric: str = "cosine",
+    ) -> List[dict]:
+        """Nearest rows to ``vector``, nearest first, with a ``distance`` column.
+
+        Uses the column's HNSW index when its metric matches (approximate, as
+        any HNSW index); otherwise scans exactly. ``where`` is an extra SQL
+        filter with ``?`` placeholders, applied before the limit.
+        """
+        _check_identifier(table)
+        _check_identifier(column)
+        for item in select:
+            if item != "*":
+                _check_identifier(item)
+        operator = {"cosine": "<=>", "l2": "<->"}.get(metric)
+        if operator is None:
+            raise ValueError("metric must be 'cosine' or 'l2'")
+        limit = int(limit)
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
+        values: List[Any] = [[float(x) for x in vector]]
+        sql = f"SELECT {', '.join(select)}, {column} {operator} ? AS distance FROM {table}"
+        if where:
+            sql += f" WHERE {where}"
+            values += list(params or [])
+        sql += f" ORDER BY distance LIMIT {limit}"
+        return self.execute(sql, values).rows
+
     def changes(self, feed: str, since: Optional[int] = None) -> List[dict]:
         """Read committed events strictly after a cursor; None reads retained history.
 

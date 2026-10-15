@@ -147,7 +147,7 @@ pub(super) fn qualify(row: &Row, qualifier: &str) -> Row {
 
 // Only constants, parameters and columns provided by an outer join row may be
 // evaluated before scanning this table. Row-dependent expressions must fall back.
-fn available(expr: &Expr, outer: &Row) -> bool {
+pub(super) fn available(expr: &Expr, outer: &Row) -> bool {
     match expr {
         Expr::Literal(_) | Expr::Parameter(_) => true,
         Expr::Column(c) => outer.get(c).is_some(),

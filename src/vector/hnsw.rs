@@ -10,7 +10,7 @@
 //! - pgvector implementation
 //! - USearch optimizations
 
-use super::index::{l2_distance, IndexType, VectorIndex, VectorSearchResult};
+use super::index::{IndexType, VectorIndex, VectorSearchResult};
 use crate::Result;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -134,13 +134,37 @@ impl HNSWIndex {
         (-uniform.ln() * self.config.ml).floor() as i32
     }
 
-    /// Get neighbors at specific layer
-    fn get_neighbors(&self, row_id: u64, layer: usize) -> Vec<u64> {
-        self.nodes
-            .get(&row_id)
-            .and_then(|node| node.neighbors.get(layer))
-            .map(|n| n.clone())
-            .unwrap_or_default()
+    /// Pick at most `m` links for a node from `candidates` (nearest first,
+    /// squared distances to that node) with the HNSW paper's heuristic: a
+    /// candidate is kept when it is closer to the node than to every link
+    /// kept so far, so links spread over directions instead of clustering.
+    /// Without it an outlier's only incoming link is pruned first and the
+    /// outlier becomes unreachable. Remaining slots are filled with the
+    /// nearest skipped candidates (keepPrunedConnections).
+    fn select_neighbors(&self, candidates: &[(u64, f32)], m: usize) -> Vec<u64> {
+        let mut kept: Vec<(u64, &[f32])> = Vec::with_capacity(m);
+        let mut skipped = Vec::new();
+        for &(id, distance) in candidates {
+            if kept.len() >= m {
+                break;
+            }
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            let vector = node.vector.as_slice();
+            if kept
+                .iter()
+                .all(|(_, other)| squared_l2(vector, other) > distance)
+            {
+                kept.push((id, vector));
+            } else {
+                skipped.push(id);
+            }
+        }
+        let mut links: Vec<u64> = kept.into_iter().map(|(id, _)| id).collect();
+        let free = m.saturating_sub(links.len());
+        links.extend(skipped.into_iter().take(free));
+        links
     }
 
     /// Search for nearest neighbors in a specific layer
@@ -158,7 +182,7 @@ impl HNSWIndex {
         // Initialize with entry points
         for ep in entry_points {
             if let Some(node) = self.nodes.get(&ep) {
-                let dist = l2_distance(query, &node.vector);
+                let dist = squared_l2(query, &node.vector);
                 visited.insert(ep);
                 candidates.push(MaxHeapEntry {
                     distance: dist,
@@ -184,12 +208,18 @@ impl HNSWIndex {
             }
 
             // Check neighbors of c
-            for &neighbor_id in &self.get_neighbors(c, layer) {
+            let links = self
+                .nodes
+                .get(&c)
+                .and_then(|node| node.neighbors.get(layer))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            for &neighbor_id in links {
                 if !visited.contains(&neighbor_id) {
                     visited.insert(neighbor_id);
 
                     if let Some(neighbor_node) = self.nodes.get(&neighbor_id) {
-                        let dist = l2_distance(query, &neighbor_node.vector);
+                        let dist = squared_l2(query, &neighbor_node.vector);
 
                         if w.len() < ef || dist < w.peek().unwrap().distance {
                             candidates.push(MaxHeapEntry {
@@ -215,6 +245,97 @@ impl HNSWIndex {
             .into_iter()
             .map(|e| (e.row_id, e.distance))
             .collect()
+    }
+
+    /// Search with an explicit candidate-list size (efSearch). A larger `ef`
+    /// raises recall; `k` results at most are returned, nearest first.
+    pub fn search_with_ef(&self, query: &[f32], k: usize, ef: usize) -> Vec<VectorSearchResult> {
+        let Some(entry) = self.entry_point else {
+            return Vec::new();
+        };
+        if query.len() != self.dimension {
+            return Vec::new();
+        }
+        let mut ep = vec![entry];
+        for lc in (1..=self.max_layer).rev() {
+            let nearest = self.search_layer(query, ep.clone(), 1, lc as usize);
+            if !nearest.is_empty() {
+                ep = vec![nearest[0].0];
+            }
+        }
+        self.search_layer(query, ep, ef.max(k), 0)
+            .into_iter()
+            .take(k)
+            .map(|(row_id, distance)| VectorSearchResult {
+                row_id,
+                distance: distance.sqrt(),
+            })
+            .collect()
+    }
+
+    /// Vector dimension accepted by `insert`.
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// Whether `row_id` is indexed.
+    pub fn contains(&self, row_id: u64) -> bool {
+        self.nodes.contains_key(&row_id)
+    }
+
+    /// Drop the nodes whose `offsets[id]` is `usize::MAX` and renumber the
+    /// rest to `offsets[id]`, in one pass over the graph. Links to dropped
+    /// nodes are removed. Returns the number of dropped nodes.
+    pub fn retain_remap(&mut self, offsets: &[usize]) -> usize {
+        let map = |id: u64| {
+            offsets
+                .get(id as usize)
+                .copied()
+                .filter(|&n| n != usize::MAX)
+                .map(|n| n as u64)
+        };
+        let old = std::mem::take(&mut self.nodes);
+        let before = old.len();
+        for (id, mut node) in old {
+            let Some(new_id) = map(id) else {
+                continue;
+            };
+            node.row_id = new_id;
+            for links in &mut node.neighbors {
+                *links = links.iter().filter_map(|&n| map(n)).collect();
+            }
+            self.nodes.insert(new_id, node);
+        }
+        self.entry_point = self.entry_point.and_then(map);
+        if self.entry_point.is_none() {
+            self.reset_entry_point();
+        }
+        before - self.nodes.len()
+    }
+
+    /// Remove one node and its incoming links, keeping a valid entry point.
+    pub fn remove_node(&mut self, row_id: u64) {
+        if self.nodes.remove(&row_id).is_none() {
+            return;
+        }
+        for node in self.nodes.values_mut() {
+            for links in &mut node.neighbors {
+                links.retain(|&id| id != row_id);
+            }
+        }
+        if self.entry_point == Some(row_id) {
+            self.reset_entry_point();
+        }
+    }
+
+    /// Point the search at the node with the most layers (the HNSW invariant).
+    fn reset_entry_point(&mut self) {
+        let top = self
+            .nodes
+            .values()
+            .max_by_key(|node| (node.neighbors.len(), std::cmp::Reverse(node.row_id)));
+        self.entry_point = top.map(|node| node.row_id);
+        self.max_layer = top.map_or(-1, |node| node.neighbors.len() as i32 - 1);
     }
 }
 
@@ -277,12 +398,12 @@ impl VectorIndex for HNSWIndex {
                 self.config.m
             };
 
-            let neighbors_to_add: Vec<u64> = candidates
+            let others: Vec<(u64, f32)> = candidates
                 .iter()
                 .filter(|(id, _)| *id != row_id) // Exclude self
-                .take(m)
-                .map(|(id, _)| *id)
+                .copied()
                 .collect();
+            let neighbors_to_add = self.select_neighbors(&others, self.config.m.min(m));
 
             // Add bidirectional links
             if let Some(new_node) = self.nodes.get_mut(&row_id) {
@@ -297,30 +418,28 @@ impl VectorIndex for HNSWIndex {
                         neighbor.neighbors[lc as usize].push(row_id);
                     }
                 }
-                // Over capacity: keep the neighbor's m closest links. Dropping
-                // the newest link unconditionally (the old truncate) left new
-                // nodes unreachable.
+                // Over capacity: re-select the neighbor's links with the
+                // heuristic. Keeping only the m closest (or dropping the
+                // newest link) leaves outliers unreachable.
                 let over = self
                     .nodes
                     .get(&neighbor_id)
                     .and_then(|n| n.neighbors.get(lc as usize))
                     .is_some_and(|links| links.len() > m);
                 if over {
-                    let base = self.nodes[&neighbor_id].vector.clone();
-                    let mut links: Vec<(f32, u64)> = self.nodes[&neighbor_id].neighbors
-                        [lc as usize]
+                    let node = &self.nodes[&neighbor_id];
+                    let mut links: Vec<(u64, f32)> = node.neighbors[lc as usize]
                         .iter()
                         .filter_map(|id| {
                             self.nodes
                                 .get(id)
-                                .map(|n| (l2_distance(&base, &n.vector), *id))
+                                .map(|n| (*id, squared_l2(&node.vector, &n.vector)))
                         })
                         .collect();
-                    links.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-                    links.truncate(m);
+                    links.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+                    let kept = self.select_neighbors(&links, m);
                     if let Some(neighbor) = self.nodes.get_mut(&neighbor_id) {
-                        neighbor.neighbors[lc as usize] =
-                            links.into_iter().map(|(_, id)| id).collect();
+                        neighbor.neighbors[lc as usize] = kept;
                     }
                 }
             }
@@ -368,7 +487,10 @@ impl VectorIndex for HNSWIndex {
         let results: Vec<VectorSearchResult> = candidates
             .iter()
             .take(k)
-            .map(|&(row_id, distance)| VectorSearchResult { row_id, distance })
+            .map(|&(row_id, distance)| VectorSearchResult {
+                row_id,
+                distance: distance.sqrt(),
+            })
             .collect();
 
         Ok(results)
@@ -408,6 +530,28 @@ impl VectorIndex for HNSWIndex {
     fn deserialize(data: &[u8]) -> Result<Self> {
         bincode::deserialize(data).map_err(|e| crate::NexusError::SerializeError(e))
     }
+}
+
+/// Squared Euclidean distance with eight independent accumulators, which the
+/// compiler can keep in SIMD registers (one running f32 sum cannot be
+/// reordered, so it adds one lane at a time). Construction and search only
+/// compare distances, so the square root is taken on output.
+#[inline]
+fn squared_l2(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let chunks = a.len().min(b.len()) / 8 * 8;
+    for (x, y) in a[..chunks].chunks_exact(8).zip(b[..chunks].chunks_exact(8)) {
+        for i in 0..8 {
+            let d = x[i] - y[i];
+            acc[i] += d * d;
+        }
+    }
+    let mut sum: f32 = acc.iter().sum();
+    for (x, y) in a[chunks..].iter().zip(&b[chunks..]) {
+        let d = x - y;
+        sum += d * d;
+    }
+    sum
 }
 
 // Helper structs for priority queue

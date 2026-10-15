@@ -12,6 +12,7 @@
 pub mod flat;
 pub mod hnsw;
 pub mod index;
+pub mod sql;
 mod test;
 
 pub use flat::FlatIndex;

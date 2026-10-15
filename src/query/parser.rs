@@ -49,6 +49,10 @@ impl Dialect for NexusQLDialect {
         true // Allow expressions in GROUP BY
     }
 
+    fn supports_create_index_with_clause(&self) -> bool {
+        true // CREATE INDEX ... USING hnsw (col) WITH (m = 16, metric = 'cosine')
+    }
+
     fn is_delimited_identifier_start(&self, ch: char) -> bool {
         ch == '"' || ch == '`' // Support both PostgreSQL and SQLite quotes
     }

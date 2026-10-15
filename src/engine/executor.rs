@@ -288,45 +288,64 @@ impl Executor {
 
                         match index_type.as_str() {
                             "hnsw" => {
-                                // Parse HNSW parameters from WITH options
-                                let mut m = 16usize;
-                                let mut ef_construction = 200usize;
-                                let mut ef_search = 50usize;
-
+                                if columns.len() != 1 {
+                                    return Err(crate::NexusError::QueryError(
+                                        "HNSW indexes cover exactly one VECTOR column".into(),
+                                    ));
+                                }
+                                // pgvector-style defaults; the graph is built on
+                                // first use, so creating the index is instant.
+                                let mut def = crate::vector::sql::VectorIndexDefinition {
+                                    name: index_name.clone(),
+                                    column: first_col.clone(),
+                                    metric: crate::vector::sql::VectorMetric::L2,
+                                    m: 16,
+                                    ef_construction: 64,
+                                    ef_search: 40,
+                                };
                                 for opt in with_options {
-                                    match opt.name.to_lowercase().as_str() {
-                                        "m" => {
-                                            if let Value::Integer(v) = &opt.value {
-                                                m = *v as usize;
-                                            }
+                                    let name = opt.name.to_lowercase();
+                                    let number = match &opt.value {
+                                        Value::Integer(v) if *v > 0 && *v <= 10_000 => {
+                                            Some(*v as usize)
                                         }
-                                        "ef_construction" => {
-                                            if let Value::Integer(v) = &opt.value {
-                                                ef_construction = *v as usize;
-                                            }
+                                        _ => None,
+                                    };
+                                    match (name.as_str(), number) {
+                                        ("m", Some(v)) => def.m = v.clamp(2, 100),
+                                        ("ef_construction", Some(v)) => def.ef_construction = v,
+                                        ("ef_search" | "ef", Some(v)) => def.ef_search = v,
+                                        ("metric" | "distance" | "ops", _) => {
+                                            let text = match &opt.value {
+                                                Value::Text(t) => t.as_str(),
+                                                _ => "",
+                                            };
+                                            def.metric = crate::vector::sql::VectorMetric::parse(text)
+                                                .ok_or_else(|| {
+                                                    crate::NexusError::QueryError(format!(
+                                                        "unknown HNSW metric {:?}; use 'l2' or 'cosine'",
+                                                        text
+                                                    ))
+                                                })?;
                                         }
-                                        "ef_search" | "ef" => {
-                                            if let Value::Integer(v) = &opt.value {
-                                                ef_search = *v as usize;
-                                            }
+                                        (other, _) => {
+                                            return Err(crate::NexusError::QueryError(format!(
+                                                "invalid HNSW option {other}; use m, ef_construction, ef_search (1..10000) or metric"
+                                            )))
                                         }
-                                        _ => {} // Ignore unknown options
                                     }
                                 }
-
-                                // Create HNSW index
-                                let hnsw_index =
-                                    crate::index::HNSWIndex::new(m, ef_construction, ef_search);
-
-                                // Store in typed_indexes
+                                t.schema.forget_index(index_name);
+                                t.schema.vector_indexes.push(def.clone());
+                                tracing::info!(
+                                    "Created HNSW index '{}' on {}.{} (metric={}, m={}, ef_construction={}, ef_search={})",
+                                    index_name, table, first_col, def.metric.name(), def.m, def.ef_construction, def.ef_search
+                                );
                                 t.typed_indexes.insert(
                                     index_name.clone(),
-                                    crate::storage::IndexType::HNSW(hnsw_index),
-                                );
-
-                                tracing::info!(
-                                    "Created HNSW index '{}' on {}.{} (m={}, ef_construction={}, ef_search={})",
-                                    index_name, table, first_col, m, ef_construction, ef_search
+                                    crate::storage::IndexType::HNSW(
+                                        crate::vector::sql::VectorColumnIndex::new(def),
+                                    ),
                                 );
                             }
                             "gin" => {
@@ -366,10 +385,7 @@ impl Executor {
                                 gist_index.bulk_load(t.rows.iter().enumerate().filter_map(
                                     |(id, row)| row.values.get(col_idx).map(|value| (id, value)),
                                 ));
-                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
-                                t.schema
-                                    .fulltext_indexes
-                                    .retain(|def| def.name != *index_name);
+                                t.schema.forget_index(index_name);
                                 t.schema.gist_indexes.push(crate::storage::GiSTDefinition {
                                     name: index_name.clone(),
                                     column: first_col.clone(),
@@ -399,10 +415,7 @@ impl Executor {
                                     first_col.clone(),
                                 );
                                 index.build(t.rows.iter().map(|row| row.values.get(col_idx)));
-                                t.schema
-                                    .fulltext_indexes
-                                    .retain(|def| def.name != *index_name);
-                                t.schema.gist_indexes.retain(|def| def.name != *index_name);
+                                t.schema.forget_index(index_name);
                                 t.schema.fulltext_indexes.push(
                                     crate::storage::FullTextDefinition {
                                         name: index_name.clone(),
@@ -733,6 +746,16 @@ impl Executor {
                             where_clause.as_ref(),
                             params,
                         )
+                        .or_else(|| {
+                            super::vector_knn::knn_rows(
+                                table,
+                                from,
+                                expr,
+                                *k,
+                                where_clause.as_ref(),
+                                params,
+                            )
+                        })
                     }
                     _ => None,
                 };
