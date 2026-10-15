@@ -113,7 +113,7 @@ npm run build:native -- --target x86_64-pc-windows-msvc
 
 **Indexing** (`src/index/`)
 - B-Tree - Standard ordered index
-- HNSW - Hierarchical Navigable Small World for vector search (1578× speedup)
+- HNSW - Vector kNN (`src/vector/sql.rs`, `src/engine/vector_knn.rs`): `CREATE INDEX .. USING hnsw (col) WITH (metric = 'cosine')` serves `ORDER BY col <=> $1 LIMIT k`; definition persisted, graph built on first query. See `docs/guides/vector-index.md`
 - GIN - Generalized Inverted Index for arrays/JSON/full-text
 - GiST - Generalized Search Tree for spatial/geometric data
 - FULLTEXT - Inverted text index (`src/fulltext/`): `col MATCH 'q'`, `bm25()`, `snippet()`; definition persisted, postings rebuilt on open. See `docs/guides/full-text-search.md`

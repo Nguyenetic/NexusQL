@@ -9,6 +9,7 @@ pub mod executor;
 pub mod hdc;
 pub mod sort;
 mod spatial;
+mod vector_knn;
 
 use crate::{
     types::{ResultSet, Value},
