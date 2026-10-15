@@ -521,9 +521,9 @@ mod tests {
         // Delete rows 1 and 2, then remap like Table::retain_rows.
         let mut offsets = Vec::new();
         let mut next = 0;
-        for row in 0..values.len() {
+        for (row, value) in values.iter().enumerate() {
             if row == 1 || row == 2 {
-                index.remove_row(row, Some(&values[row]));
+                index.remove_row(row, Some(value));
                 offsets.push(usize::MAX);
             } else {
                 offsets.push(next);
@@ -559,10 +559,10 @@ mod tests {
             .collect();
         let mut index = FullTextIndex::new("i".into(), "c".into());
         index.build(values.iter().map(Some));
-        for row in 0..2500 {
+        for (row, value) in values.iter_mut().enumerate().take(2500) {
             let new = text(&format!("changed{} common", row % 5));
-            index.replace_row(row, Some(&values[row]), Some(&new));
-            values[row] = new;
+            index.replace_row(row, Some(value), Some(&new));
+            *value = new;
         }
         assert!(index.dead_docs < index.live_docs, "compaction ran");
         for query in ["common", "doc3", "changed2", "chan*", "NOT common"] {

@@ -470,7 +470,7 @@ pub fn snippet(
             phrases.dedup();
             let last_hit = inside.iter().map(|h| h.1).max().unwrap_or(first);
             let rank = (phrases.len(), inside.len());
-            if best.as_ref().map_or(true, |(r, _, _)| rank > *r) {
+            if best.as_ref().is_none_or(|(r, _, _)| rank > *r) {
                 best = Some((rank, first, last_hit));
             }
         }
